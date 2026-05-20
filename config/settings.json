@@ -1,0 +1,91 @@
+{
+    "capture": {
+        "monitor": 1,
+        "region": null,
+        "fps": 60
+    },
+    "detection": {
+        "model_path": "detection/models/best.pt",
+        "fallback_model": "yolov8n.pt",
+        "confidence": 0.5,
+        "detection_fps": 10,
+        "classes": ["enemy", "elite", "boss", "loot", "portal", "npc", "dead_screen", "hp_bar", "inventory_full"]
+    },
+    "combat": {
+        "skills": ["1", "2", "3"],
+        "skill_cooldowns": [2.0, 5.0, 8.0],
+        "basic_attack_key": "1",
+        "target_priority": ["boss", "elite", "enemy"],
+        "attack_range": 150,
+        "target_click_offset": 3
+    },
+    "navigation": {
+        "waypoints": [],
+        "move_click_key": "right",
+        "waypoint_reached_threshold": 30,
+        "move_delay": 0.5
+    },
+    "loot": {
+        "pickup_delay": 0.3,
+        "max_pickup_attempts": 3,
+        "loot_radius": 100
+    },
+    "potion": {
+        "hp_threshold": 40,
+        "potion_key": "F1",
+        "cooldown": 5.0,
+        "hp_recovery_target": 70
+    },
+    "death": {
+        "revive_delay": 2.0,
+        "return_to_farm_delay": 3.0
+    },
+    "inventory": {
+        "sell_key": "s",
+        "npc_waypoint_index": 0,
+        "sell_delay": 1.0
+    },
+    "humanizer": {
+        "enabled": true,
+        "min_delay": 0.05,
+        "max_delay": 0.2,
+        "mouse_curve": true,
+        "mouse_speed": 0.3,
+        "click_offset": 3,
+        "typing_min_delay": 0.02,
+        "typing_max_delay": 0.08
+    },
+    "anti_stuck": {
+        "enabled": true,
+        "check_interval": 5.0,
+        "stuck_threshold": 3.0,
+        "max_retries": 5,
+        "position_history_size": 20
+    },
+    "overlay": {
+        "enabled": true,
+        "show_boxes": true,
+        "show_state": true,
+        "show_fps": true,
+        "show_waypoints": true,
+        "box_thickness": 2,
+        "font_scale": 0.6,
+        "opacity": 0.7
+    },
+    "hotkeys": {
+        "start_stop": "f9",
+        "toggle_overlay": "f12",
+        "record_waypoint": "f10",
+        "capture_screenshot": "f11",
+        "toggle_auto_capture": "f7",
+        "emergency_stop": "f8"
+    },
+    "general": {
+        "log_level": "INFO",
+        "log_file": "bot.log",
+        "main_loop_fps": 20,
+        "auto_capture_dataset": false,
+        "auto_capture_interval": 2.0,
+        "max_dataset_images": 1000
+    }
+}
