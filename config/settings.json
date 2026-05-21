@@ -17,13 +17,41 @@
         "basic_attack_key": "1",
         "target_priority": ["boss", "elite", "enemy"],
         "attack_range": 150,
-        "target_click_offset": 3
+        "target_click_offset": 3,
+
+        "combo_enabled": true,
+        "combo_sequence": ["2", "3", "1", "1", "1"],
+        "combo_cooldowns": [0.0, 5.0, 8.0, 2.0, 2.0],
+
+        "escape_logic": {
+            "enabled": true,
+            "hp_escape_threshold": 25,
+            "danger_score_threshold": 70,
+            "escape_skill": "4",
+            "escape_skill_cooldown": 12.0,
+            "retreat_distance": 300,
+            "surrounded_enemy_count": 3,
+            "boss_danger_weight": 40,
+            "nearby_enemy_weight": 15,
+            "low_hp_weight": 30,
+            "potion_cooldown_weight": 10
+        }
     },
     "navigation": {
         "waypoints": [],
         "move_click_key": "right",
         "waypoint_reached_threshold": 30,
-        "move_delay": 0.5
+        "move_delay": 0.5,
+
+        "minimap": {
+            "enabled": true,
+            "region": null,
+            "green_dot_lower_hsv": [40, 70, 70],
+            "green_dot_upper_hsv": [80, 255, 255],
+            "min_dot_area": 5,
+            "max_dot_area": 400,
+            "waypoint_click_offset": 20
+        }
     },
     "loot": {
         "pickup_delay": 0.3,
@@ -68,6 +96,8 @@
         "show_state": true,
         "show_fps": true,
         "show_waypoints": true,
+        "show_danger_score": true,
+        "show_combo_step": true,
         "box_thickness": 2,
         "font_scale": 0.6,
         "opacity": 0.7
@@ -86,6 +116,7 @@
         "main_loop_fps": 20,
         "auto_capture_dataset": false,
         "auto_capture_interval": 2.0,
-        "max_dataset_images": 1000
+        "max_dataset_images": 1000,
+        "action_lock_enabled": true
     }
 }

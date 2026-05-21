@@ -234,7 +234,11 @@ class DrakensangBot:
                     detections = self.detector.detections
 
                     # Step 2: Update game state
-                    self.game_state.update_from_detections(detections)
+                    frame = self.capture.frame
+                    self.game_state.update_from_detections(detections, frame)
+
+                    # Step 2b: Feed frame into minimap tracker (green-dot nav)
+                    self.navigation.update_minimap_frame(frame)
 
                     # Step 3: Decision engine evaluates and acts
                     action = self.decision.evaluate()

@@ -9,6 +9,8 @@ that the decision engine uses to make choices.
 import time
 import threading
 import math
+import cv2
+import numpy as np
 from collections import deque
 from utils.logger import get_logger
 
@@ -192,12 +194,13 @@ class GameState:
     # Update Methods
     # =========================================================
 
-    def update_from_detections(self, detections: list):
+    def update_from_detections(self, detections: list, frame=None):
         """
         Update game state from YOLO detection results.
 
         Args:
             detections: List of Detection objects from YOLODetector
+            frame: Optional screen BGR numpy array
         """
         with self._lock:
             # Clear previous detections
@@ -232,7 +235,7 @@ class GameState:
                 elif cls == "hp_bar":
                     self._hp_bar_detected = True
                     # Estimate HP from bar width ratio (can be refined)
-                    self._estimate_hp(det)
+                    self._estimate_hp(det, frame)
                 elif cls == "inventory_full":
                     self._inventory_full = True
 
@@ -274,19 +277,44 @@ class GameState:
                 })
                 self._last_position_time = now
 
-    def _estimate_hp(self, hp_bar_detection):
+    def _estimate_hp(self, hp_bar_detection, frame=None):
         """
-        Estimate HP percentage from HP bar detection.
-        This is a rough estimate based on the detected HP bar width.
+        Estimate HP percentage from HP bar detection using OpenCV HSV analysis.
+        """
+        if frame is None:
+            return
 
-        Args:
-            hp_bar_detection: Detection object for HP bar
-        """
-        # HP estimation can be refined based on game-specific HP bar characteristics
-        # For now, we use the width ratio as a basic estimate
-        # A full HP bar should have a known width, and the detected width ratio gives HP%
-        # This needs calibration for the specific game
-        pass  # HP stays at default until calibrated
+        try:
+            x1, y1, x2, y2 = hp_bar_detection.bbox
+            h, w = frame.shape[:2]
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(w, x2), min(h, y2)
+
+            if x2 > x1 and y2 > y1:
+                hp_crop = frame[y1:y2, x1:x2]
+                hsv = cv2.cvtColor(hp_crop, cv2.COLOR_BGR2HSV)
+
+                # Red color ranges in HSV
+                lower_red1 = np.array([0, 50, 50])
+                upper_red1 = np.array([10, 255, 255])
+                lower_red2 = np.array([170, 50, 50])
+                upper_red2 = np.array([180, 255, 255])
+
+                mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+                mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+                red_mask = mask1 | mask2
+
+                red_pixels = cv2.countNonZero(red_mask)
+                total_pixels = hp_crop.shape[0] * hp_crop.shape[1]
+
+                if total_pixels > 0:
+                    # Scaling: 80% filled area is generally considered full health (100%) due to borders/HUD details
+                    ratio = red_pixels / total_pixels
+                    estimated = min(100.0, (ratio / 0.8) * 100.0)
+                    self._hp_percent = estimated
+                    logger.debug(f"Dynamic HP calculated: {estimated:.1f}% (Red ratio: {ratio:.3f})")
+        except Exception as e:
+            logger.error(f"Error estimating HP from frame: {e}")
 
     def set_hp(self, percent: float):
         """Manually set HP percentage (for testing or alternative detection)."""
