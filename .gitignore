@@ -21,3 +21,17 @@ env/
 # OS specific files
 .DS_Store
 Thumbs.db
+
+# Dataset and Training Outputs (Ignored to avoid cluttering GitHub)
+dataset/
+source/
+dataset_yolo/
+runs/
+drakensang_yolo/
+
+# Base model files
+yolov8n.pt
+
+# PyTorch F drive cache (local)
+temp/
+pip_cache/
