@@ -22,6 +22,7 @@ import cv2
 import numpy as np
 from state.game_state import GameState
 from input.humanizer import Humanizer
+from input.action_lock import ActionLock
 from utils.logger import get_logger
 
 logger = get_logger("navigation")
@@ -46,9 +47,11 @@ class WaypointSystem:
     # Default minimap region as fraction of screen (top-right corner in DSO)
     _DEFAULT_MINIMAP_FRAC = {"left": 0.77, "top": 0.0, "right": 1.0, "bottom": 0.22}
 
-    def __init__(self, game_state: GameState, humanizer: Humanizer, config: dict):
+    def __init__(self, game_state: GameState, humanizer: Humanizer, config: dict,
+                 action_lock: ActionLock = None):
         self.state = game_state
         self.input = humanizer
+        self.action_lock = action_lock or ActionLock(enabled=False)
 
         # --- Classic waypoint config ---
         self.waypoints = config.get("waypoints", [])
@@ -81,6 +84,7 @@ class WaypointSystem:
 
         # Config file path for saving waypoints
         self._config_path = os.path.join("config", "settings.json")
+        self.active_map_name = "default"
 
         logger.info(
             f"WaypointSystem initialized | Waypoints: {len(self.waypoints)} | "
@@ -120,6 +124,7 @@ class WaypointSystem:
         """
         Execute one navigation tick.
         Called by the decision engine when in MOVING state.
+        All movement clicks are serialized through the action lock.
         """
         if not self.waypoints:
             logger.debug("No waypoints configured — standing idle")
@@ -134,11 +139,16 @@ class WaypointSystem:
         if waypoint is None:
             return
 
-        # Choose navigation mode
-        if self.minimap_enabled:
-            self._execute_minimap_navigation(waypoint)
-        else:
-            self._execute_classic_navigation(waypoint)
+        with self.action_lock.acquire("navigation") as acquired:
+            if not acquired:
+                logger.debug("Navigation skipped — action lock unavailable")
+                return
+
+            # Choose navigation mode
+            if self.minimap_enabled:
+                self._execute_minimap_navigation(waypoint)
+            else:
+                self._execute_classic_navigation(waypoint)
 
         self._last_move_time = now
 
@@ -417,27 +427,33 @@ class WaypointSystem:
         self.record_point(pos.x, pos.y, mx, my)
 
     def _save_waypoints(self):
-        """Save waypoints to the config file."""
+        """Save waypoints to the config file or active map file."""
         try:
-            if os.path.exists(self._config_path):
-                with open(self._config_path, "r", encoding="utf-8") as f:
-                    config = json.load(f)
+            if self.active_map_name == "default":
+                if os.path.exists(self._config_path):
+                    with open(self._config_path, "r", encoding="utf-8") as f:
+                        config = json.load(f)
+                else:
+                    config = {}
+
+                if "navigation" not in config:
+                    config["navigation"] = {}
+                config["navigation"]["waypoints"] = self.waypoints
+
+                with open(self._config_path, "w", encoding="utf-8") as f:
+                    json.dump(config, f, indent=4)
+                logger.info(f"Waypoints saved to {self._config_path}")
             else:
-                config = {}
-
-            if "navigation" not in config:
-                config["navigation"] = {}
-            config["navigation"]["waypoints"] = self.waypoints
-
-            with open(self._config_path, "w", encoding="utf-8") as f:
-                json.dump(config, f, indent=4)
-
-            logger.info(f"Waypoints saved to {self._config_path}")
+                os.makedirs(os.path.join("config", "maps"), exist_ok=True)
+                map_file = os.path.join("config", "maps", f"{self.active_map_name}.json")
+                with open(map_file, "w", encoding="utf-8") as f:
+                    json.dump({"waypoints": self.waypoints}, f, indent=4)
+                logger.info(f"Waypoints saved to map file {map_file}")
         except Exception as e:
             logger.error(f"Failed to save waypoints: {e}")
 
     def load_waypoints_from_file(self, filepath: str):
-        """Load waypoints from a JSON file."""
+        """Load waypoints from a JSON file and update active map name."""
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -448,7 +464,13 @@ class WaypointSystem:
                 self.waypoints = data["waypoints"]
 
             self._current_waypoint_index = 0
-            logger.info(f"Loaded {len(self.waypoints)} waypoints from {filepath}")
+            
+            # Extract map name from filename
+            base = os.path.basename(filepath)
+            name, _ = os.path.splitext(base)
+            self.active_map_name = name
+            
+            logger.info(f"Loaded {len(self.waypoints)} waypoints for map '{name}' from {filepath}")
         except Exception as e:
             logger.error(f"Failed to load waypoints: {e}")
 

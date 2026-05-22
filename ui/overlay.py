@@ -87,7 +87,7 @@ class Overlay:
         self._window_name = "Drakensang AI Bot - Overlay"
         self._running = False
         self._thread = None
-        self._visible = True
+        self._visible = False
 
         logger.info(f"Overlay initialized | Enabled: {self.enabled}")
 
@@ -273,15 +273,24 @@ class Overlay:
     def _overlay_loop(self):
         """Main overlay rendering loop."""
         logger.info("Overlay thread started")
-
-        cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(self._window_name, 960, 540)
+        window_created = False
 
         while self._running:
             try:
                 if not self._visible:
+                    if window_created:
+                        try:
+                            cv2.destroyWindow(self._window_name)
+                        except Exception:
+                            pass
+                        window_created = False
                     time.sleep(0.1)
                     continue
+
+                if not window_created:
+                    cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
+                    cv2.resizeWindow(self._window_name, 960, 540)
+                    window_created = True
 
                 # Get current frame
                 frame = self.capture.frame if self.capture else None
@@ -327,7 +336,11 @@ class Overlay:
                 logger.error(f"Overlay error: {e}")
                 time.sleep(0.1)
 
-        cv2.destroyAllWindows()
+        if window_created:
+            try:
+                cv2.destroyWindow(self._window_name)
+            except Exception:
+                pass
         logger.info("Overlay thread stopped")
 
     def start(self):
@@ -340,7 +353,6 @@ class Overlay:
             return
 
         self._running = True
-        self._visible = True
         self._thread = threading.Thread(target=self._overlay_loop, daemon=True, name="OverlayThread")
         self._thread.start()
         logger.info("Overlay started")

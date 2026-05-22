@@ -1,0 +1,34 @@
+{
+    "Base Address": {
+        "val": "0x00D70000",
+        "desc": "Process game base pointer address"
+    },
+    "Player HP Offset": {
+        "val": "0x1C",
+        "desc": "Current Player Health Point offset"
+    },
+    "Player Max HP Offset": {
+        "val": "0x20",
+        "desc": "Max Player Health Point offset"
+    },
+    "Player Mana Offset": {
+        "val": "0x24",
+        "desc": "Current Player Resource (Mana/Rage/Steam) offset"
+    },
+    "Target Base Address": {
+        "val": "0x00D78000",
+        "desc": "Base address pointer for active combat targets"
+    },
+    "Entity Count Offset": {
+        "val": "0x38",
+        "desc": "Counts the number of active entities in drawing range"
+    },
+    "Minimap Coordinates": {
+        "val": "0x40",
+        "desc": "Character X/Y coordinates on the minimap overlay"
+    },
+    "Gold Counter Offset": {
+        "val": "0x5A",
+        "desc": "Player total gold count representation offset"
+    }
+}

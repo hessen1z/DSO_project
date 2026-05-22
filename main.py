@@ -38,7 +38,9 @@ from recovery.death_recovery import DeathRecovery
 from recovery.anti_stuck import AntiStuck
 from inventory.inventory_system import InventorySystem
 from input.humanizer import Humanizer
+from input.action_lock import ActionLock
 from ui.overlay import Overlay
+from decision.tactical_brain import TacticalBrain
 
 
 class DrakensangBot:
@@ -142,6 +144,13 @@ class DrakensangBot:
         # 1. Humanizer (needed by most systems)
         self.humanizer = Humanizer(self.config.get("humanizer", {}))
 
+        # 1b. Action Lock (serializes all input actions)
+        general = self.config.get("general", {})
+        self.action_lock = ActionLock(
+            enabled=general.get("action_lock_enabled", True),
+            timeout=3.0
+        )
+
         # 2. Screen Capture
         self.capture = ScreenCapture(self.config.get("capture", {}))
 
@@ -154,13 +163,15 @@ class DrakensangBot:
         # 5. Navigation
         self.navigation = WaypointSystem(
             self.game_state, self.humanizer,
-            self.config.get("navigation", {})
+            self.config.get("navigation", {}),
+            action_lock=self.action_lock
         )
 
         # 6. Combat
         self.combat = CombatSystem(
             self.game_state, self.humanizer,
-            self.config.get("combat", {})
+            self.config.get("combat", {}),
+            action_lock=self.action_lock
         )
 
         # 7. Loot
@@ -200,6 +211,11 @@ class DrakensangBot:
         self.decision = DecisionEngine(
             self.game_state, self.config
         )
+
+        # 12b. Tactical Brain (AI thinking layer)
+        self.brain = TacticalBrain(self.game_state, self.config)
+        # Share brain reference with CombatSystem for intent-based skill selection
+        self.combat.tactical_brain = self.brain
 
         # 13. Overlay
         self.overlay = Overlay(
@@ -425,11 +441,11 @@ class DrakensangBot:
             "f12": keyboard.Key.f12,
         }
 
-        start_stop_key = key_map.get(hotkey_cfg.get("start_stop", "f9"), keyboard.Key.f9)
+        start_stop_key = key_map.get(hotkey_cfg.get("start_stop", "f12"), keyboard.Key.f12)
         record_key = key_map.get(hotkey_cfg.get("record_waypoint", "f10"), keyboard.Key.f10)
-        screenshot_key = key_map.get(hotkey_cfg.get("capture_screenshot", "f11"), keyboard.Key.f11)
-        auto_capture_key = key_map.get(hotkey_cfg.get("toggle_auto_capture", "f7"), keyboard.Key.f7)
-        overlay_key = key_map.get(hotkey_cfg.get("toggle_overlay", "f12"), keyboard.Key.f12)
+        screenshot_key = key_map.get(hotkey_cfg.get("capture_screenshot", "f7"), keyboard.Key.f7)
+        auto_capture_key = key_map.get(hotkey_cfg.get("toggle_auto_capture", "f11"), keyboard.Key.f11)
+        overlay_key = key_map.get(hotkey_cfg.get("toggle_overlay", "f9"), keyboard.Key.f9)
         emergency_key = key_map.get(hotkey_cfg.get("emergency_stop", "f8"), keyboard.Key.f8)
 
         def on_press(key):
@@ -458,11 +474,11 @@ class DrakensangBot:
 
         listener = keyboard.Listener(on_press=on_press)
         listener.start()
-        self.log.info(f"Hotkeys registered: Start/Stop={hotkey_cfg.get('start_stop', 'F9').upper()}, "
+        self.log.info(f"Hotkeys registered: Start/Stop={hotkey_cfg.get('start_stop', 'F12').upper()}, "
                       f"Record={hotkey_cfg.get('record_waypoint', 'F10').upper()}, "
-                      f"Screenshot={hotkey_cfg.get('capture_screenshot', 'F11').upper()}, "
-                      f"AutoCapture={hotkey_cfg.get('toggle_auto_capture', 'F7').upper()}, "
-                      f"Overlay={hotkey_cfg.get('toggle_overlay', 'F12').upper()}, "
+                      f"Screenshot={hotkey_cfg.get('capture_screenshot', 'F7').upper()}, "
+                      f"AutoCapture={hotkey_cfg.get('toggle_auto_capture', 'F11').upper()}, "
+                      f"Overlay={hotkey_cfg.get('toggle_overlay', 'F9').upper()}, "
                       f"Emergency={hotkey_cfg.get('emergency_stop', 'F8').upper()}")
 
         return listener
@@ -478,9 +494,9 @@ class DrakensangBot:
         # Setup hotkeys
         listener = self._setup_hotkeys()
 
-        self.log.info("Bot is ready! Press F9 to start, F8 to exit.")
+        self.log.info("Bot is ready! Click START BOT in the GUI, F8 to exit.")
         print("\n" + "="*60)
-        print("  BOT READY - Press F9 to START, F8 to EXIT")
+        print("  BOT READY - Click START BOT in the GUI, F8 to EXIT")
         print("="*60 + "\n")
 
         # Keep main thread alive

@@ -39,6 +39,64 @@ COLORS = {
 }
 
 
+class ModernCard(tk.Canvas):
+    """A beautiful custom card widget with rounded corners and optional borders."""
+    def __init__(self, parent, bg, border_color, radius=16, **kwargs):
+        super().__init__(parent, bg=COLORS["bg_medium"], highlightthickness=0, **kwargs)
+        self.bg_color = bg
+        self.border_color = border_color
+        self.radius = radius
+        
+        # Internal container for child widgets
+        self.container = tk.Frame(self, bg=bg)
+        self.container_id = self.create_window(0, 0, window=self.container, anchor="nw")
+        
+        self.bind("<Configure>", self._on_resize)
+
+    def configure(self, **kwargs):
+        # Extract custom arguments if passed
+        if "bg" in kwargs:
+            self.bg_color = kwargs.pop("bg")
+        if "border_color" in kwargs:
+            self.border_color = kwargs.pop("border_color")
+        
+        # Pass remaining standard canvas configuration arguments to super
+        super().configure(**kwargs)
+        self._on_resize()
+
+    def config(self, **kwargs):
+        self.configure(**kwargs)
+        
+    def _on_resize(self, event=None):
+        w = event.width if event else self.winfo_width()
+        h = event.height if event else self.winfo_height()
+        r = self.radius
+        
+        self.container.config(bg=self.bg_color)
+        
+        self.delete("bg")
+        # Draw soft rounded corners
+        self.create_arc(0, 0, r*2, r*2, start=90, extent=90, fill=self.bg_color, outline=self.border_color, tags="bg")
+        self.create_arc(w-r*2-1, 0, w-1, r*2, start=0, extent=90, fill=self.bg_color, outline=self.border_color, tags="bg")
+        self.create_arc(0, h-r*2-1, r*2, h-1, start=180, extent=90, fill=self.bg_color, outline=self.border_color, tags="bg")
+        self.create_arc(w-r*2-1, h-r*2-1, w-1, h-1, start=270, extent=90, fill=self.bg_color, outline=self.border_color, tags="bg")
+        
+        # Draw central filled boxes to cover the center area
+        self.create_rectangle(r, 0, w-r, h, fill=self.bg_color, outline="", tags="bg")
+        self.create_rectangle(0, r, w, h-r, fill=self.bg_color, outline="", tags="bg")
+        
+        # Draw border outline lines
+        self.create_line(r, 0, w-r, 0, fill=self.border_color, tags="bg")
+        self.create_line(r, h-1, w-r, h-1, fill=self.border_color, tags="bg")
+        self.create_line(0, r, 0, h-r, fill=self.border_color, tags="bg")
+        self.create_line(w-1, r, w-1, h-r, fill=self.border_color, tags="bg")
+        
+        # Position container frame slightly inside the rounded boundaries
+        pad = 6
+        self.coords(self.container_id, pad, pad)
+        self.itemconfigure(self.container_id, width=max(1, w - pad*2), height=max(1, h - pad*2))
+
+
 class LoginWindow:
     """
     Premium login window with animated effects.
@@ -89,6 +147,31 @@ class LoginWindow:
 
         # Handle close
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Bind Map event to restore overrideredirect and rounded corners when restored from taskbar
+        self.root.bind("<Map>", self._on_window_map)
+
+        # Apply rounded corners after full UI is built and rendered
+        self.root.after(100, self._apply_system_rounded_corners)
+
+    def _apply_system_rounded_corners(self):
+        try:
+            import ctypes
+            self.root.update_idletasks()
+            # wm_frame() returns the real OS-level top-level window handle
+            hwnd = int(self.root.wm_frame(), 16)
+            rgn = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, 902, 602, 22, 22)
+            ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True)
+        except Exception:
+            pass
+
+    def _on_window_map(self, event):
+        self.root.overrideredirect(True)
+        self._apply_system_rounded_corners()
+
+    def _minimize_window(self):
+        self.root.overrideredirect(False)
+        self.root.iconify()
 
     def _center_window(self):
         """Center the window on the screen."""
@@ -146,7 +229,7 @@ class LoginWindow:
         min_btn.pack(side=tk.RIGHT)
         min_btn.bind("<Enter>", lambda e: min_btn.config(bg=COLORS["gray_mid"], fg="white"))
         min_btn.bind("<Leave>", lambda e: min_btn.config(bg=COLORS["bg_dark"], fg=COLORS["text_dim"]))
-        min_btn.bind("<Button-1>", lambda e: self.root.iconify())
+        min_btn.bind("<Button-1>", lambda e: self._minimize_window())
 
         # Drag support
         self.title_bar.bind("<Button-1>", self._start_drag)
@@ -348,36 +431,43 @@ class LoginWindow:
             anchor="w"
         ).pack(anchor="w", padx=30, pady=(10, 3))
 
-        # Entry container with border effect
-        entry_frame = tk.Frame(
+        # Entry container with rounded border card (radius=16)
+        entry_card = ModernCard(
             parent,
-            bg=COLORS["border"],
-            padx=1, pady=1
+            bg=COLORS["bg_input"],
+            border_color=COLORS["border"],
+            radius=16,
+            height=36
         )
-        entry_frame.pack(padx=30, fill=tk.X)
+        entry_card.pack(padx=30, fill=tk.X)
+        entry_card.pack_propagate(False)
 
         entry = tk.Entry(
-            entry_frame,
+            entry_card.container,
             bg=COLORS["bg_input"],
             fg=COLORS["text_primary"],
             insertbackground=COLORS["red_primary"],
             font=("Consolas", 11),
             relief="flat",
-            bd=8,
+            bd=0,
         )
         if show_char:
             entry.config(show=show_char)
 
-        entry.pack(fill=tk.X)
+        entry.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
 
         # Focus effects
         def on_focus_in(e):
-            entry_frame.config(bg=COLORS["border_focus"])
+            entry_card.bg_color = COLORS["bg_input_focus"]
+            entry_card.border_color = COLORS["border_focus"]
             entry.config(bg=COLORS["bg_input_focus"])
+            entry_card._on_resize()
 
         def on_focus_out(e):
-            entry_frame.config(bg=COLORS["border"])
+            entry_card.bg_color = COLORS["bg_input"]
+            entry_card.border_color = COLORS["border"]
             entry.config(bg=COLORS["bg_input"])
+            entry_card._on_resize()
 
         entry.bind("<FocusIn>", on_focus_in)
         entry.bind("<FocusOut>", on_focus_out)
@@ -390,11 +480,20 @@ class LoginWindow:
     def _draw_login_button(self, color, text="LOGIN ▸"):
         """Draw the login button on canvas."""
         self.login_btn.delete("all")
-        # Rounded rectangle background
-        self.login_btn.create_rectangle(
-            2, 2, 338, 43,
-            fill=color, outline=color, width=0
-        )
+        
+        x1, y1, x2, y2 = 2, 2, 338, 43
+        r = 12
+        
+        # Draw rounded corner arcs
+        self.login_btn.create_arc(x1, y1, x1 + r*2, y1 + r*2, start=90, extent=90, fill=color, outline=color, tags="btn")
+        self.login_btn.create_arc(x2 - r*2, y1, x2, y1 + r*2, start=0, extent=90, fill=color, outline=color, tags="btn")
+        self.login_btn.create_arc(x1, y2 - r*2, x1 + r*2, y2, start=180, extent=90, fill=color, outline=color, tags="btn")
+        self.login_btn.create_arc(x2 - r*2, y2 - r*2, x2, y2, start=270, extent=90, fill=color, outline=color, tags="btn")
+        
+        # Fill the center rectangles
+        self.login_btn.create_rectangle(x1 + r, y1, x2 - r, y2, fill=color, outline=color, tags="btn")
+        self.login_btn.create_rectangle(x1, y1 + r, x2, y2 - r, fill=color, outline=color, tags="btn")
+        
         # Button text
         self.login_btn.create_text(
             170, 22,
@@ -555,3 +654,24 @@ class LoginWindow:
     @property
     def license_key(self):
         return self._license_key
+
+
+if __name__ == "__main__":
+    import os
+    import sys
+    
+    # Add parent directory (project root) to path
+    parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+        
+    try:
+        from main import launch_with_gui
+        launch_with_gui()
+    except Exception as e:
+        print(f"Error launching Drakensang AI Bot: {e}")
+        # Fallback to test mode if main cannot be imported
+        def test_callback(username, license_key):
+            print(f"[TEST] Success! User: {username}, Key: {license_key}")
+        login = LoginWindow(on_login_success=test_callback)
+        login.run()

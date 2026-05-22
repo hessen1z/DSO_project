@@ -9,20 +9,53 @@
         "fallback_model": "yolov8n.pt",
         "confidence": 0.5,
         "detection_fps": 10,
-        "classes": ["enemy", "elite", "boss", "loot", "portal", "npc", "dead_screen", "hp_bar", "inventory_full"]
+        "classes": [
+            "enemy",
+            "elite",
+            "boss",
+            "loot",
+            "portal",
+            "npc",
+            "dead_screen",
+            "hp_bar",
+            "inventory_full"
+        ]
     },
     "combat": {
-        "skills": ["1", "2", "3"],
-        "skill_cooldowns": [2.0, 5.0, 8.0],
+        "active_class": "custom",
+        "skills": [
+            "1",
+            "2",
+            "3"
+        ],
+        "skill_cooldowns": [
+            2.0,
+            5.0,
+            8.0
+        ],
         "basic_attack_key": "1",
-        "target_priority": ["boss", "elite", "enemy"],
+        "target_priority": [
+            "boss",
+            "elite",
+            "enemy"
+        ],
         "attack_range": 150,
         "target_click_offset": 3,
-
         "combo_enabled": true,
-        "combo_sequence": ["2", "3", "1", "1", "1"],
-        "combo_cooldowns": [0.0, 5.0, 8.0, 2.0, 2.0],
-
+        "combo_sequence": [
+            "2",
+            "3",
+            "1",
+            "1",
+            "1"
+        ],
+        "combo_cooldowns": [
+            0.0,
+            5.0,
+            8.0,
+            2.0,
+            2.0
+        ],
         "escape_logic": {
             "enabled": true,
             "hp_escape_threshold": 25,
@@ -42,12 +75,19 @@
         "move_click_key": "right",
         "waypoint_reached_threshold": 30,
         "move_delay": 0.5,
-
         "minimap": {
             "enabled": true,
             "region": null,
-            "green_dot_lower_hsv": [40, 70, 70],
-            "green_dot_upper_hsv": [80, 255, 255],
+            "green_dot_lower_hsv": [
+                40,
+                70,
+                70
+            ],
+            "green_dot_upper_hsv": [
+                80,
+                255,
+                255
+            ],
             "min_dot_area": 5,
             "max_dot_area": 400,
             "waypoint_click_offset": 20
@@ -103,11 +143,11 @@
         "opacity": 0.7
     },
     "hotkeys": {
-        "start_stop": "f9",
-        "toggle_overlay": "f12",
+        "start_stop": "f12",
+        "toggle_overlay": "f9",
         "record_waypoint": "f10",
-        "capture_screenshot": "f11",
-        "toggle_auto_capture": "f7",
+        "capture_screenshot": "f7",
+        "toggle_auto_capture": "f11",
         "emergency_stop": "f8"
     },
     "general": {

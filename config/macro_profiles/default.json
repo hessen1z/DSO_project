@@ -1,0 +1,19 @@
+{
+  "profile_name": "Default",
+  "active_class": "ranger",
+  "prioritize_elites": true,
+  "auto_dodge_boss_aoe": true,
+  "mana_conservation": false,
+  "slots": [
+    {"label": "Hunting Arrow", "key": "q", "condition": "always", "cooldown": 0.0, "range": 9999, "delay": 0.1, "intent": "single_dps"},
+    {"label": "Precise Shot", "key": "1", "condition": "enemy_in_range", "cooldown": 0.0, "range": 700, "delay": 0.15, "intent": "single_dps"},
+    {"label": "Hunting Trap", "key": "3", "condition": "enemy_in_range", "cooldown": 8.0, "range": 400, "delay": 0.2, "intent": "cc"},
+    {"label": "Explosive Arrow", "key": "9", "condition": "surrounded", "cooldown": 5.0, "range": 600, "delay": 0.2, "intent": "aoe_burst"},
+    {"label": "Net (Stun)", "key": "5", "condition": "boss_detected", "cooldown": 10.0, "range": 450, "delay": 0.2, "intent": "cc"},
+    {"label": "Adrenaline", "key": "7", "condition": "low_hp", "cooldown": 20.0, "range": 9999, "delay": 0.15, "intent": "escape"},
+    {"label": "Wild Pack", "key": "8", "condition": "boss_detected", "cooldown": 50.0, "range": 9999, "delay": 0.2, "intent": "buff"},
+    {"label": "Dive (Escape)", "key": "4", "condition": "low_hp", "cooldown": 8.0, "range": 9999, "delay": 0.1, "intent": "escape"},
+    {"label": "Death Sweep", "key": "2", "condition": "enemy_in_range", "cooldown": 0.0, "range": 150, "delay": 0.15, "intent": "single_dps"},
+    {"label": "Scatter Shot", "key": "6", "condition": "surrounded", "cooldown": 0.0, "range": 550, "delay": 0.2, "intent": "aoe_burst"}
+  ]
+}

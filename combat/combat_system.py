@@ -8,12 +8,18 @@ Features:
 - Escape Logic: Danger-score-based retreat when HP critical or surrounded
 - Tactical kiting: Clicks away from enemies to create distance before re-engaging
 - Priority targeting: boss > elite > enemy with weighted distance scoring
+- Class Profiles: Ranger / Mage / DK / Steam with tailored combat parameters
+- Action Locking: Thread-safe input serialization via global ActionLock
 """
 
+import os
+import json
 import time
 import math
 from state.game_state import GameState
 from input.humanizer import Humanizer
+from input.action_lock import ActionLock
+from combat.class_profiles import get_profile
 from utils.logger import get_logger
 
 logger = get_logger("combat")
@@ -32,29 +38,52 @@ class CombatSystem:
     When danger_score >= threshold → RETREAT mode is activated.
     """
 
-    def __init__(self, game_state: GameState, humanizer: Humanizer, config: dict):
+    def __init__(self, game_state: GameState, humanizer: Humanizer, config: dict,
+                 action_lock: ActionLock = None):
         self.state = game_state
         self.input = humanizer
+        self.action_lock = action_lock or ActionLock(enabled=False)
+
+        # --- Load class profile (overlay on top of config) ---
+        self._active_class = config.get("active_class", "custom")
+        profile = get_profile(self._active_class)
+
+        # Profile values are defaults; explicit config values override them
+        def _cfg(key, fallback_profile_key=None):
+            """Get value from config, falling back to profile, then a default."""
+            pk = fallback_profile_key or key
+            return config.get(key, profile.get(pk))
 
         # --- Basic combat config ---
-        self.skills = config.get("skills", ["1", "2", "3"])
-        self.skill_cooldowns = config.get("skill_cooldowns", [2.0, 5.0, 8.0])
-        self.basic_attack_key = config.get("basic_attack_key", "1")
+        self.skills = _cfg("skills")
+        self.skill_cooldowns = _cfg("skill_cooldowns")
+        self.basic_attack_key = _cfg("basic_attack_key")
         self.target_priority = config.get("target_priority", ["boss", "elite", "enemy"])
-        self.attack_range = config.get("attack_range", 150)
+        self.attack_range = _cfg("attack_range", "engagement_range")
         self.target_click_offset = config.get("target_click_offset", 3)
 
+        # --- Class behavior ---
+        self.preferred_range = profile.get("preferred_range", "melee")
+        self.kite_enabled = _cfg("kite_enabled")
+        self.kite_distance = _cfg("kite_distance")
+        self.aoe_skill = _cfg("aoe_skill")
+        self.aoe_enemy_threshold = _cfg("aoe_enemy_threshold")
+
         # --- Combo Engine ---
-        self.combo_enabled = config.get("combo_enabled", True)
-        self.combo_sequence = config.get("combo_sequence", self.skills)
-        self.combo_cooldowns = config.get("combo_cooldowns", self.skill_cooldowns)
+        self.combo_enabled = _cfg("combo_enabled")
+        self.combo_sequence = _cfg("combo_sequence")
+        self.combo_cooldowns = _cfg("combo_cooldowns")
         self._combo_step = 0               # Current step in the combo sequence
         self._combo_last_used = {}
         for key in self.combo_sequence:
             self._combo_last_used[key] = 0
 
         # --- Escape Logic ---
-        escape_cfg = config.get("escape_logic", {})
+        # Profile's escape_logic is the base; config's escape_logic overrides
+        profile_escape = profile.get("escape_logic", {})
+        config_escape = config.get("escape_logic", {})
+        escape_cfg = {**profile_escape, **config_escape}
+
         self.escape_enabled = escape_cfg.get("enabled", True)
         self.hp_escape_threshold = escape_cfg.get("hp_escape_threshold", 25)
         self.danger_score_threshold = escape_cfg.get("danger_score_threshold", 70)
@@ -66,6 +95,15 @@ class CombatSystem:
         self.nearby_enemy_weight = escape_cfg.get("nearby_enemy_weight", 15)
         self.low_hp_weight = escape_cfg.get("low_hp_weight", 30)
         self.potion_cooldown_weight = escape_cfg.get("potion_cooldown_weight", 10)
+
+        # --- Macro Engine ---
+        self.macro_enabled = config.get("macro_enabled", True)
+        self.active_macro_profile = config.get("macro_profile_name", "Default")
+        self._macro_last_used = {}
+        self._load_macro_profile(self.active_macro_profile)
+
+        # --- Tactical Brain reference (set by main.py after brain is created) ---
+        self.tactical_brain = None
 
         # --- Escape state ---
         self._escape_last_used = 0
@@ -82,9 +120,13 @@ class CombatSystem:
         self._current_skill_index = 0
         self._last_attack_time = 0
         self._attack_count = 0
+        self._aoe_last_used = 0
 
         logger.info(
-            f"CombatSystem initialized | Combo: {self.combo_sequence} | "
+            f"CombatSystem initialized | Class: {profile.get('display_name', self._active_class)} | "
+            f"Combo: {self.combo_sequence} | Range: {self.preferred_range} | "
+            f"Kite: {self.kite_enabled} | "
+            f"Macro Enabled: {self.macro_enabled} ({self.active_macro_profile}) | "
             f"Escape threshold: {self.hp_escape_threshold}% HP / "
             f"danger≥{self.danger_score_threshold}"
         )
@@ -97,33 +139,82 @@ class CombatSystem:
         """
         Execute one combat tick.
         Called by the decision engine when in COMBAT state.
+        All input actions are wrapped in the global action lock.
         """
-        # Step 1: Calculate current danger level
-        danger = self._calculate_danger_score()
-        logger.debug(f"Danger score: {danger:.0f}")
+        with self.action_lock.acquire("combat") as acquired:
+            if not acquired:
+                logger.debug("Combat skipped — action lock unavailable")
+                return
 
-        # Step 2: Check if we should retreat instead of fight
-        if self.escape_enabled and danger >= self.danger_score_threshold:
-            self._execute_retreat()
-            return
+            # Step 1: Calculate current danger level
+            danger = self._calculate_danger_score()
+            logger.debug(f"Danger score: {danger:.0f}")
 
-        # Step 3: We're safe enough — select and attack a target
-        self._retreating = False
-        target = self._select_target()
-        if target is None:
-            logger.debug("No target available")
-            return
+            # Step 2: Check if we should retreat instead of fight
+            if self.escape_enabled and danger >= self.danger_score_threshold:
+                self._execute_retreat()
+                return
 
-        # Step 4: Click on target to select it
-        self._target_enemy(target)
+            # Step 3: We're safe enough — select and attack a target
+            self._retreating = False
 
-        # Step 5: Use next combo step or skill rotation
-        if self.combo_enabled:
-            self._use_combo_skill()
-        else:
-            self._use_skill()
+            # Step 3b: Ask TacticalBrain for a situational assessment
+            tac = None
+            if self.tactical_brain is not None:
+                tac = self.tactical_brain.evaluate()
+                # Use brain's primary target preference if available
+                target = tac.get("primary_target") or self._select_target()
+            else:
+                target = self._select_target()
 
-        self._attack_count += 1
+            if target is None:
+                logger.debug("No target available")
+                return
+
+            # Step 4: Kiting — maintain distance for ranged classes
+            movement_style = tac.get("movement_style", "melee") if tac else ("kite" if self.kite_enabled else "melee")
+            if movement_style == "kite" and target:
+                self._execute_kite(target)
+
+            # Step 5: AoE check — use AoE if surrounded
+            all_targets = self.state.all_targets
+            if (self.aoe_skill and len(all_targets) >= self.aoe_enemy_threshold
+                    and time.time() - self._aoe_last_used > 5.0):
+                logger.info(f"⚡ AoE triggered — {len(all_targets)} enemies, [{self.aoe_skill}]")
+                self.input.press_key(self.aoe_skill)
+                self._aoe_last_used = time.time()
+                self.input.delay(0.05, 0.1)
+                return
+
+            # Step 6: Click on target to select it
+            self._target_enemy(target)
+
+            # Step 7: Skill selection — TacticalBrain intent takes priority
+            if tac and self.macro_enabled and self.tactical_brain is not None:
+                intent = tac.get("recommended_intent", "single_dps")
+                best_slot = self.tactical_brain.get_best_slot_for_intent(intent, self.macro_slots)
+                if best_slot:
+                    # Use intent-recommended slot
+                    key   = best_slot.get("key", "")
+                    delay = best_slot.get("delay", 0.1)
+                    if key:
+                        logger.info(f"Brain intent={intent} → skill [{key}] ({best_slot.get('label', '')})") 
+                        self.input.delay(delay * 0.5, delay)
+                        self.input.press_key(key)
+                        self._macro_last_used[key] = time.time()
+                        self.input.delay(0.05, 0.12)
+                        self._attack_count += 1
+                        return
+                # Fallback to standard macro if brain found no match
+                self._use_macro_skill(target)
+            elif self.macro_enabled:
+                self._use_macro_skill(target)
+            elif self.combo_enabled:
+                self._use_combo_skill()
+            else:
+                self._use_skill()
+
+            self._attack_count += 1
 
     # =========================================================
     # Danger Score
@@ -324,6 +415,87 @@ class CombatSystem:
         logger.debug("Basic attack (all skills on cooldown)")
 
     # =========================================================
+    # Kiting (ranged class positioning)
+    # =========================================================
+
+    def _execute_kite(self, target):
+        """
+        Maintain kite distance from the target for ranged classes.
+        If the enemy is too close, step backward before attacking.
+        """
+        if not target:
+            return
+
+        cx = self.state._screen_center_x
+        cy = self.state._screen_center_y
+        dist = target.distance_to(cx, cy)
+
+        # If enemy is closer than our kite distance, step back
+        if dist < self.kite_distance * 0.6:
+            dx = cx - target.center_x
+            dy = cy - target.center_y
+            norm = math.sqrt(dx * dx + dy * dy) or 1.0
+
+            step = self.kite_distance * 0.4
+            kx = int(cx + (dx / norm) * step)
+            ky = int(cy + (dy / norm) * step)
+
+            # Clamp to screen
+            kx = max(50, min(1870, kx))
+            ky = max(50, min(1030, ky))
+
+            logger.debug(f"Kiting away to ({kx}, {ky}), enemy dist={dist:.0f}px")
+            self.input.right_click(kx, ky)
+            self.input.delay(0.08, 0.15)
+
+    # =========================================================
+    # Class Profile Switching
+    # =========================================================
+
+    def switch_class(self, class_name: str):
+        """
+        Hot-switch the combat profile to a different class.
+
+        Args:
+            class_name: One of 'ranger', 'mage', 'dragonknight', 'steam', 'custom'
+        """
+        profile = get_profile(class_name)
+        self._active_class = class_name
+
+        self.skills = profile.get("skills", self.skills)
+        self.skill_cooldowns = profile.get("skill_cooldowns", self.skill_cooldowns)
+        self.basic_attack_key = profile.get("basic_attack_key", self.basic_attack_key)
+        self.attack_range = profile.get("engagement_range", self.attack_range)
+        self.preferred_range = profile.get("preferred_range", self.preferred_range)
+        self.kite_enabled = profile.get("kite_enabled", self.kite_enabled)
+        self.kite_distance = profile.get("kite_distance", self.kite_distance)
+        self.aoe_skill = profile.get("aoe_skill", self.aoe_skill)
+        self.aoe_enemy_threshold = profile.get("aoe_enemy_threshold", self.aoe_enemy_threshold)
+        self.combo_enabled = profile.get("combo_enabled", self.combo_enabled)
+        self.combo_sequence = profile.get("combo_sequence", self.combo_sequence)
+        self.combo_cooldowns = profile.get("combo_cooldowns", self.combo_cooldowns)
+
+        # Update escape logic
+        esc = profile.get("escape_logic", {})
+        self.escape_enabled = esc.get("enabled", self.escape_enabled)
+        self.hp_escape_threshold = esc.get("hp_escape_threshold", self.hp_escape_threshold)
+        self.danger_score_threshold = esc.get("danger_score_threshold", self.danger_score_threshold)
+        self.escape_skill = esc.get("escape_skill", self.escape_skill)
+        self.retreat_distance = esc.get("retreat_distance", self.retreat_distance)
+
+        # Reset combo state
+        self._combo_step = 0
+        self._combo_last_used = {k: 0 for k in self.combo_sequence}
+        self._skill_last_used = {s: 0 for s in self.skills}
+
+        logger.info(f"Switched class profile to: {profile.get('display_name', class_name)}")
+
+    @property
+    def active_class(self) -> str:
+        """Get the currently active class profile name."""
+        return self._active_class
+
+    # =========================================================
     # State / Status
     # =========================================================
 
@@ -344,11 +516,137 @@ class CombatSystem:
         """Get combat status for logging/overlay."""
         target = self.state.current_target
         return {
+            "active_class": self._active_class,
             "attack_count": self._attack_count,
             "combo_step": self._combo_step,
             "combo_skill": self.combo_sequence[self._combo_step] if self.combo_sequence else "?",
             "retreating": self._retreating,
+            "kiting": self.kite_enabled,
             "danger_score": round(self._calculate_danger_score(), 1),
             "has_target": target is not None,
             "target_class": target.class_name if target else "none",
         }
+
+    # =========================================================
+    # Macro Engine Internals
+    # =========================================================
+
+    def _load_macro_profile(self, name: str):
+        """Load macro profile from config/macro_profiles/name.json."""
+        self.macro_slots = []
+        self.prioritize_elites = True
+        self.auto_dodge_boss_aoe = True
+        self.mana_conservation = False
+
+        filename = f"{name.lower().strip()}.json"
+        path = os.path.join("config", "macro_profiles", filename)
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.macro_slots = data.get("slots", [])
+                    self.prioritize_elites = data.get("prioritize_elites", True)
+                    self.auto_dodge_boss_aoe = data.get("auto_dodge_boss_aoe", True)
+                    self.mana_conservation = data.get("mana_conservation", False)
+                    logger.info(f"Loaded macro profile: {name} with {len(self.macro_slots)} slots")
+                    
+                    # Initialize last used timers for macro keys
+                    for slot in self.macro_slots:
+                        key = slot.get("key")
+                        if key and key not in self._macro_last_used:
+                            self._macro_last_used[key] = 0
+                    return
+            except Exception as e:
+                logger.error(f"Error loading macro profile {path}: {e}")
+
+        # Fallback to default.json
+        default_path = os.path.join("config", "macro_profiles", "default.json")
+        if os.path.exists(default_path):
+            try:
+                with open(default_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.macro_slots = data.get("slots", [])
+                    self.prioritize_elites = data.get("prioritize_elites", True)
+                    self.auto_dodge_boss_aoe = data.get("auto_dodge_boss_aoe", True)
+                    self.mana_conservation = data.get("mana_conservation", False)
+                    logger.info("Loaded default macro profile")
+                    
+                    for slot in self.macro_slots:
+                        key = slot.get("key")
+                        if key and key not in self._macro_last_used:
+                            self._macro_last_used[key] = 0
+                    return
+            except Exception as e:
+                logger.error(f"Error loading default macro profile: {e}")
+
+        # In-memory fallback if default files fail to load
+        self.macro_slots = [
+            {"label": "Basic Attack", "key": "q", "condition": "always", "cooldown": 0.0, "range": 9999, "delay": 0.1},
+            {"label": "Skill 1", "key": "1", "condition": "enemy_in_range", "cooldown": 3.0, "range": 400, "delay": 0.15},
+            {"label": "Skill 2", "key": "2", "condition": "enemy_in_range", "cooldown": 6.0, "range": 500, "delay": 0.2}
+        ]
+        for slot in self.macro_slots:
+            self._macro_last_used[slot["key"]] = 0
+
+    def _use_macro_skill(self, target):
+        """
+        Evaluate all configured macro slots in priority order.
+        Casts the first skill whose condition is met and is off cooldown.
+        """
+        now = time.time()
+        for idx, slot in enumerate(self.macro_slots):
+            key = slot.get("key")
+            if not key:
+                continue
+
+            cooldown = slot.get("cooldown", 0.0)
+            last_used = self._macro_last_used.get(key, 0)
+
+            # Check cooldown
+            if now - last_used < cooldown:
+                continue
+
+            # Evaluate condition
+            condition = slot.get("condition", "always")
+            if self._evaluate_condition(condition, slot, target):
+                logger.debug(f"Macro Slot {idx+1} [{slot.get('label', key)}]: Condition '{condition}' met. Casting [{key}]")
+                self.input.press_key(key)
+                self._macro_last_used[key] = now
+                delay = slot.get("delay", 0.1)
+                self.input.delay(delay, delay + 0.05)
+                return
+
+        # Default fallback
+        self.input.press_key(self.basic_attack_key)
+        logger.debug("No macro condition met — falling back to basic attack")
+
+    def _evaluate_condition(self, condition: str, slot: dict, target) -> bool:
+        cond = condition.lower().strip()
+
+        if cond == "always":
+            return True
+
+        elif cond == "enemy_in_range":
+            if not target:
+                return False
+            cx = self.state._screen_center_x
+            cy = self.state._screen_center_y
+            dist = target.distance_to(cx, cy)
+            return dist <= slot.get("range", 9999)
+
+        elif cond == "low_hp":
+            # Check player HP percentage from state
+            return self.state.hp_percent < 40
+
+        elif cond == "surrounded":
+            # Surrounded if 3 or more targets
+            return len(self.state.all_targets) >= 3
+
+        elif cond == "boss_detected":
+            # Check if any boss in range
+            return any(t.class_name == "boss" for t in self.state.all_targets)
+
+        elif cond in ("off_cooldown", "buff_expired"):
+            return True
+
+        return False
