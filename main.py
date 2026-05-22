@@ -72,8 +72,11 @@ class DrakensangBot:
     ╚══════════════════════════════════════════════════════════════╝
     """
 
-    def __init__(self):
+    def __init__(self, authenticated=False):
         """Initialize the bot with all systems."""
+        if not authenticated:
+            raise PermissionError("Access Denied: DrakensangBot must be initialized through the secure login interface.")
+
         # Load config
         self.config = self._load_config()
 
@@ -85,7 +88,12 @@ class DrakensangBot:
         )
         self.log = get_logger("main")
 
-        print(self.BANNER)
+        try:
+            print(self.BANNER)
+        except UnicodeEncodeError:
+            print("\n" + "="*60)
+            print("         DRAKENSANG AI VISION BOT v1.0")
+            print("="*60 + "\n")
         self.log.info("Initializing Drakensang AI Bot...")
 
         # Main loop config
@@ -472,7 +480,7 @@ class DrakensangBot:
 
         self.log.info("Bot is ready! Press F9 to start, F8 to exit.")
         print("\n" + "="*60)
-        print("  BOT READY — Press F9 to START, F8 to EXIT")
+        print("  BOT READY - Press F9 to START, F8 to EXIT")
         print("="*60 + "\n")
 
         # Keep main thread alive
@@ -492,6 +500,57 @@ class DrakensangBot:
 # Entry Point
 # =========================================================
 
+def launch_with_gui():
+    """
+    Launch the bot with GUI flow:
+    1. Show Login Window → authenticate user
+    2. Initialize DrakensangBot
+    3. Show Main GUI Control Panel
+    4. Bot runs via hotkeys + GUI controls
+    """
+    from ui.login_window import LoginWindow
+    from ui.main_gui import MainGUI
+
+    authenticated = False
+    credentials = {}
+
+    def on_login_success(username, license_key):
+        nonlocal authenticated, credentials
+        authenticated = True
+        credentials["username"] = username
+        credentials["license_key"] = license_key
+
+    # Step 1: Show Login
+    login = LoginWindow(on_login_success=on_login_success)
+    login.run()
+
+    if not authenticated:
+        print("[EXIT] Authentication cancelled.")
+        return
+
+    # Step 2: Initialize Bot
+    print(f"\n[AUTH] Welcome, {credentials['username']}!")
+    print("[INIT] Initializing Drakensang AI Bot...\n")
+
+    bot = DrakensangBot(authenticated=True)
+
+    # Step 3: Setup hotkeys in background
+    listener = bot._setup_hotkeys()
+
+    # Step 4: Launch Main GUI (blocks main thread)
+    gui = MainGUI(
+        bot_instance=bot,
+        username=credentials["username"],
+        license_key=credentials["license_key"],
+        authenticated=True
+    )
+    gui.run()
+
+    # Cleanup
+    bot.stop_bot()
+    listener.stop()
+    print("\n[EXIT] Bot shutdown complete. Goodbye!")
+
+
 if __name__ == "__main__":
-    bot = DrakensangBot()
-    bot.run()
+    launch_with_gui()
