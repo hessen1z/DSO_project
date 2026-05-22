@@ -192,7 +192,45 @@ class CombatSystem:
             # Step 7: Skill selection — TacticalBrain intent takes priority
             if tac and self.macro_enabled and self.tactical_brain is not None:
                 intent = tac.get("recommended_intent", "single_dps")
-                best_slot = self.tactical_brain.get_best_slot_for_intent(intent, self.macro_slots)
+                
+                # Filter macro slots to find the highest priority one for this intent that is off cooldown
+                best_slot = None
+                matching_slots = []
+                now = time.time()
+                
+                for slot in self.macro_slots:
+                    slot_intent = slot.get("intent", "single_dps")
+                    slot_condition = slot.get("condition", "always")
+                    key = slot.get("key")
+                    if not key:
+                        continue
+                    
+                    # Check cooldown
+                    cooldown = slot.get("cooldown", 0.0)
+                    last_used = self._macro_last_used.get(key, 0)
+                    if now - last_used < cooldown:
+                        continue
+                        
+                    # Evaluate condition
+                    if not self._evaluate_condition(slot_condition, slot, target):
+                        continue
+                        
+                    # Calculate matching score
+                    score = 0
+                    conditions = self.tactical_brain.INTENT_CONDITIONS.get(intent, ["always"])
+                    if slot_intent == intent:
+                        score = 2
+                    elif slot_condition in conditions:
+                        score = 1
+                        
+                    if score > 0:
+                        matching_slots.append((slot, score))
+                        
+                if matching_slots:
+                    # Sort by score descending
+                    matching_slots.sort(key=lambda x: x[1], reverse=True)
+                    best_slot = matching_slots[0][0]
+                    
                 if best_slot:
                     # Use intent-recommended slot
                     key   = best_slot.get("key", "")

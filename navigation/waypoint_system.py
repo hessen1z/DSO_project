@@ -321,15 +321,21 @@ class WaypointSystem:
 
             # Click toward the next waypoint on the minimap (slightly ahead)
             click_x, click_y = self._get_click_ahead(px, py, wp_mx, wp_my)
+            
+            logger.debug(
+                f"Minimap nav → clicking ({click_x}, {click_y}) "
+                f"toward waypoint {self._current_waypoint_index}"
+            )
+            self.input.right_click(click_x, click_y)
         else:
-            # No dot detected — click directly on the waypoint
+            # No dot detected — click directly on the waypoint and advance classic style!
             click_x, click_y = wp_mx, wp_my
-
-        logger.debug(
-            f"Minimap nav → clicking ({click_x}, {click_y}) "
-            f"toward waypoint {self._current_waypoint_index}"
-        )
-        self.input.right_click(click_x, click_y)
+            logger.debug(
+                f"Minimap nav (no player dot) → clicking ({click_x}, {click_y}) "
+                f"and advancing waypoint {self._current_waypoint_index}"
+            )
+            self.input.right_click(click_x, click_y)
+            self._advance_waypoint()
 
     def _get_click_ahead(self, px: int, py: int, tx: int, ty: int) -> tuple:
         """
