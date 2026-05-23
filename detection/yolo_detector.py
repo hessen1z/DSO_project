@@ -113,6 +113,10 @@ class YOLODetector:
         """Load the YOLO model."""
         try:
             from ultralytics import YOLO
+            import torch
+
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info(f"Targeting device for YOLO: {self.device.upper()} (CUDA Available: {torch.cuda.is_available()})")
 
             # Try custom model first
             if os.path.exists(self.model_path):
@@ -125,9 +129,23 @@ class YOLODetector:
                 self.model = YOLO(self.fallback_model)
                 self.using_custom = False
 
+            if self.device == "cuda":
+                self.model.to(self.device)
+
             self.model_loaded = True
-            logger.info(f"YOLO model loaded | Custom: {self.using_custom} | "
+            logger.info(f"YOLO model loaded | Custom: {self.using_custom} | Device: {self.device.upper()} | "
                         f"Confidence: {self.confidence} | Target FPS: {self.target_fps}")
+
+            # Early Model/CUDA Warm-Up: runs a single dummy inference at startup.
+            # This completely avoids the 5-10 second CUDA cold-start freeze (which blocks Python's GIL 
+            # and triggers Windows 'Not Responding' popups) when the user clicks 'START BOT' later.
+            try:
+                logger.info("Initializing CUDA context & performing early YOLO warm-up...")
+                dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                _ = self.model(dummy_frame, conf=self.confidence, verbose=False, device=self.device)
+                logger.info("YOLO model & CUDA context successfully warmed up early!")
+            except Exception as warm_err:
+                logger.warning(f"Early YOLO warm-up skipped or failed: {warm_err}")
 
         except ImportError:
             logger.error("ultralytics not installed! Run: pip install ultralytics")
@@ -162,7 +180,8 @@ class YOLODetector:
 
         try:
             # Run inference
-            results = self.model(frame, conf=self.confidence, verbose=False)
+            device_name = getattr(self, "device", "cpu")
+            results = self.model(frame, conf=self.confidence, verbose=False, device=device_name)
 
             detections = []
             for result in results:

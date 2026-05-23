@@ -189,9 +189,11 @@ class CombatSystem:
             # Step 6: Click on target to select it
             self._target_enemy(target)
 
-            # Step 7: Skill selection — TacticalBrain intent takes priority
-            if tac and self.macro_enabled and self.tactical_brain is not None:
-                intent = tac.get("recommended_intent", "single_dps")
+            # Step 7: Skill selection — Ranger specialized logic or TacticalBrain intent
+            if self._active_class == "ranger":
+                self._execute_ranger_combat(target, tac)
+            elif tac and self.macro_enabled and self.tactical_brain is not None:
+                intent = tac.get("recommended_intent", "single_dps") if isinstance(tac, dict) else "single_dps"
                 
                 # Filter macro slots to find the highest priority one for this intent that is off cooldown
                 best_slot = None
@@ -199,6 +201,8 @@ class CombatSystem:
                 now = time.time()
                 
                 for slot in self.macro_slots:
+                    if not isinstance(slot, dict):
+                        continue
                     slot_intent = slot.get("intent", "single_dps")
                     slot_condition = slot.get("condition", "always")
                     key = slot.get("key")
@@ -588,11 +592,18 @@ class CombatSystem:
                     self.mana_conservation = data.get("mana_conservation", False)
                     logger.info(f"Loaded macro profile: {name} with {len(self.macro_slots)} slots")
                     
+                    # Update active class and switch profile dynamically
+                    profile_class = data.get("active_class")
+                    if profile_class:
+                        self.switch_class(profile_class)
+                        logger.info(f"Dynamically switched combat profile to class: {profile_class}")
+                    
                     # Initialize last used timers for macro keys
                     for slot in self.macro_slots:
-                        key = slot.get("key")
-                        if key and key not in self._macro_last_used:
-                            self._macro_last_used[key] = 0
+                        if isinstance(slot, dict):
+                            key = slot.get("key")
+                            if key and key not in self._macro_last_used:
+                                self._macro_last_used[key] = 0
                     return
             except Exception as e:
                 logger.error(f"Error loading macro profile {path}: {e}")
@@ -609,10 +620,17 @@ class CombatSystem:
                     self.mana_conservation = data.get("mana_conservation", False)
                     logger.info("Loaded default macro profile")
                     
+                    # Update active class and switch profile dynamically
+                    profile_class = data.get("active_class")
+                    if profile_class:
+                        self.switch_class(profile_class)
+                        logger.info(f"Dynamically switched combat profile to class: {profile_class}")
+                    
                     for slot in self.macro_slots:
-                        key = slot.get("key")
-                        if key and key not in self._macro_last_used:
-                            self._macro_last_used[key] = 0
+                        if isinstance(slot, dict):
+                            key = slot.get("key")
+                            if key and key not in self._macro_last_used:
+                                self._macro_last_used[key] = 0
                     return
             except Exception as e:
                 logger.error(f"Error loading default macro profile: {e}")
@@ -688,3 +706,93 @@ class CombatSystem:
             return True
 
         return False
+
+    def _execute_ranger_combat(self, target, tac):
+        """
+        Specialized highly intelligent combat routine for the Ranger class.
+        Executes: Decoy (Tree/Wild Pack) -> Adrenaline (Concentration) ->
+        Hunting Trap -> Explosive Arrow -> Thicket of Thorns / AoE -> Precise Shot Spam.
+        Also prioritizes marked targets if possible.
+        """
+        now = time.time()
+        all_targets = self.state.all_targets
+        
+        # 1. Decoy / Tree Summon (Key 8)
+        # Cast Wild Pack (decoy/tree) at the start of a combat encounter to gather enemies.
+        # Cooldown: 50s. We trigger it if there are 3+ enemies or a boss.
+        last_decoy = self._macro_last_used.get("8", 0)
+        if now - last_decoy > 50.0 and (len(all_targets) >= 3 or any(t.class_name == "boss" for t in all_targets)):
+            logger.info("🌲 Summoning Decoy/Tree (Wild Pack) to group enemies")
+            self.input.press_key("8")
+            self._macro_last_used["8"] = now
+            self.input.delay(0.15, 0.22)
+            self._attack_count += 1
+            return
+
+        # 2. Adrenaline (Key 7)
+        # Restores Concentration. We cast it when we need to dump mana or reset,
+        # or when we are about to spam Precise Shot. Cooldown: 20s.
+        last_adrenaline = self._macro_last_used.get("7", 0)
+        # We can trigger it if our attack count is high or if we are low on mana (approximated after a couple of Precise Shots).
+        if now - last_adrenaline > 20.0 and (self._attack_count % 6 == 0):
+            logger.info("⚡ Using Adrenaline to reset Concentration/Mana")
+            self.input.press_key("7")
+            self._macro_last_used["7"] = now
+            self.input.delay(0.1, 0.15)
+            self._attack_count += 1
+            return
+
+        # 3. Target lock and marking priority
+        # Let's check if there is any target that is elite or boss. If we just clicked target, we lock it.
+        # Click on target to select/lock it.
+        self._target_enemy(target)
+
+        # 4. Hunting Trap (Key 3)
+        # Lay trap to Mark and slow enemies. Cooldown: 8s.
+        # We throw it at the target's location.
+        last_trap = self._macro_last_used.get("3", 0)
+        if now - last_trap > 8.0:
+            logger.info("🎯 Laying Hunting Trap to group and Mark enemies")
+            self.input.press_key("3")
+            self._macro_last_used["3"] = now
+            self.input.delay(0.18, 0.25)
+            self._attack_count += 1
+            return
+
+        # 5. Explosive Arrow (Key 9)
+        # High damage AoE that deals double damage to Marked. Cooldown: 5s.
+        # Best used right after Hunting Trap!
+        last_explosive = self._macro_last_used.get("9", 0)
+        if now - last_explosive > 5.0 and now - last_trap < 4.0:
+            logger.info("💥 Firing Explosive Arrow on Marked enemies")
+            self.input.press_key("9")
+            self._macro_last_used["9"] = now
+            self.input.delay(0.18, 0.25)
+            self._attack_count += 1
+            return
+
+        # 6. Net (Key 5) or Scatter Shot (Key 6) or Thicket/Death Sweep (Key 2)
+        # CC / AoE filler.
+        last_net = self._macro_last_used.get("5", 0)
+        if now - last_net > 10.0 and (any(t.class_name in ("boss", "elite") for t in all_targets) or len(all_targets) >= 3):
+            logger.info("🕸️ Casting Net/Thorns (CC)")
+            self.input.press_key("5")
+            self._macro_last_used["5"] = now
+            self.input.delay(0.15, 0.2)
+            self._attack_count += 1
+            return
+
+        # 7. Precise Shot spam (Key 1)
+        # Main single target and marked DPS skill. Cooldown: 0s.
+        # Spams this skill to deal massive damage.
+        logger.debug("🎯 Spamming Precise Shot (Main DPS)")
+        self.input.press_key("1")
+        self.input.delay(0.12, 0.18)
+        self._attack_count += 1
+
+        # Fallback basic attack (Key q) if Precise Shot is somehow not castable
+        # or as a filler attack every couple of shots
+        if self._attack_count % 4 == 0:
+            self.input.press_key("q")
+            self.input.delay(0.08, 0.12)
+

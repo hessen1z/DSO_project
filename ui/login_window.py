@@ -122,6 +122,8 @@ class LoginWindow:
         self._username = ""
         self._license_key = ""
         self._animation_running = True
+        self._glow_after_id = None
+        self._launch_after_id = None
         self._glow_phase = 0.0
         self._drag_x = 0
         self._drag_y = 0
@@ -543,7 +545,7 @@ class LoginWindow:
                     fill=seg_color, outline=seg_color
                 )
 
-        self.root.after(30, self._animate_glow)
+        self._glow_after_id = self.root.after(30, self._animate_glow)
 
     # ═══════════════════════════════════════════════════════
     # Login Logic
@@ -607,7 +609,7 @@ class LoginWindow:
         self._draw_login_button(COLORS["success"], text="✓ WELCOME")
 
         # Close login and launch main GUI after short delay
-        self.root.after(800, self._launch_main)
+        self._launch_after_id = self.root.after(800, self._launch_main)
 
     def _on_auth_failed(self):
         """Handle failed authentication."""
@@ -618,9 +620,24 @@ class LoginWindow:
         self.login_btn.bind("<Leave>", lambda e: self._draw_login_button(COLORS["red_primary"]))
         self.login_btn.bind("<Button-1>", lambda e: self._on_login_click())
 
+    def _cancel_after_callbacks(self):
+        self._animation_running = False
+        if hasattr(self, "_glow_after_id") and self._glow_after_id:
+            try:
+                self.root.after_cancel(self._glow_after_id)
+            except Exception:
+                pass
+            self._glow_after_id = None
+        if hasattr(self, "_launch_after_id") and self._launch_after_id:
+            try:
+                self.root.after_cancel(self._launch_after_id)
+            except Exception:
+                pass
+            self._launch_after_id = None
+
     def _launch_main(self):
         """Close login window and trigger main GUI."""
-        self._animation_running = False
+        self._cancel_after_callbacks()
         self.root.destroy()
         if self.on_login_success:
             self.on_login_success(self._username, self._license_key)
@@ -631,7 +648,7 @@ class LoginWindow:
 
     def _on_close(self):
         """Handle window close."""
-        self._animation_running = False
+        self._cancel_after_callbacks()
         self.root.destroy()
 
     # ═══════════════════════════════════════════════════════

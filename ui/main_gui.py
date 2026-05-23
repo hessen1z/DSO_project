@@ -7,6 +7,10 @@ live interactive charts (donut and bar charts), a target tracker,
 and a right sidebar user profile & alert notifications.
 """
 
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import tkinter as tk
 from tkinter import scrolledtext
 from tkinter import messagebox
@@ -14,6 +18,9 @@ import threading
 import time
 import math
 import logging
+from utils.logger import get_logger
+
+logger = get_logger("gui")
 import random
 import glob
 import os
@@ -172,6 +179,12 @@ class MainGUI:
         # Start core loops
         self._update_stats_loop()
         self._animate_accent()
+        
+        # Configure and start safe main-thread overlay loop
+        if hasattr(self.bot, "overlay") and self.bot.overlay:
+            self.bot.overlay.gui_active = True
+            self._update_overlay_loop()
+            
         # Handle close
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -595,16 +608,21 @@ class MainGUI:
             import pygetwindow as gw
             import psutil
 
-            GAME_WINDOW_TITLES = ["Drakensang Online", "Bigpoint", "drakensang"]
+            GAME_WINDOW_TITLES = ["drakensang online", "bigpoint"]
             GAME_EXE_NAMES     = ["drakensang.exe", "dso.exe", "bigpoint.exe"]
 
             self._append_log("Searching for Drakensang Online process...", "warning")
 
             # ── 1. Try to find via window title ──────────────────────
             found_window = None
+            skip_keywords = ["visual studio", "vscode", "code", "cmd", "powershell", "control panel", "login", "python", "explorer"]
             for title_fragment in GAME_WINDOW_TITLES:
-                matches = [w for w in gw.getAllWindows()
-                           if title_fragment.lower() in w.title.lower() and w.title.strip()]
+                matches = []
+                for w in gw.getAllWindows():
+                    t = w.title.lower().strip()
+                    if title_fragment in t and t:
+                        if not any(skip in t for skip in skip_keywords):
+                            matches.append(w)
                 if matches:
                     found_window = matches[0]
                     break
@@ -885,21 +903,34 @@ class MainGUI:
         
         if raw_detections:
             for det in raw_detections:
-                label = det.get('label', 'enemy')
-                bbox = det.get('bbox', None)
-                if bbox:
-                    # Map bbox center relative to screen center
-                    x, y, bw, bh = bbox
-                    dcx = x + bw/2
-                    dcy = y + bh/2
-                    rx = (dcx - 320) / 320.0
-                    ry = (dcy - 240) / 240.0
-                    
-                    px = cx + rx * r_max * 0.9
-                    py = cy + ry * r_max * 0.9
-                    
-                    col = COLORS["error"] if "enemy" in label.lower() or "mob" in label.lower() else COLORS["success"] if "loot" in label.lower() else COLORS["gold"]
-                    canvas.create_oval(px - 3, py - 3, px + 3, py + 3, fill=col, outline="")
+                # Support both Detection objects and raw dicts
+                if hasattr(det, 'class_name'):
+                    label = det.class_name
+                    bbox = det.bbox
+                    if bbox:
+                        x, y = bbox[0], bbox[1]
+                        bw, bh = det.width, det.height
+                    else:
+                        continue
+                else:
+                    label = det.get('label', 'enemy')
+                    bbox = det.get('bbox', None)
+                    if bbox:
+                        x, y, bw, bh = bbox
+                    else:
+                        continue
+                
+                # Map bbox center relative to screen center
+                dcx = x + bw/2
+                dcy = y + bh/2
+                rx = (dcx - 320) / 320.0
+                ry = (dcy - 240) / 240.0
+                
+                px = cx + rx * r_max * 0.9
+                py = cy + ry * r_max * 0.9
+                
+                col = COLORS["error"] if "enemy" in label.lower() or "mob" in label.lower() else COLORS["success"] if "loot" in label.lower() else COLORS["gold"]
+                canvas.create_oval(px - 3, py - 3, px + 3, py + 3, fill=col, outline="")
 
         self.root.after(30, self._animate_radar)
 
@@ -2734,6 +2765,21 @@ class MainGUI:
 
         self.root.after(30, self._animate_accent)
 
+    def _update_overlay_loop(self):
+        """Periodically trigger overlay updates safely from the main GUI thread."""
+        if not self._running:
+            return
+
+        try:
+            if hasattr(self.bot, "overlay") and self.bot.overlay:
+                if hasattr(self.bot.overlay, "update_once"):
+                    self.bot.overlay.update_once()
+        except Exception as e:
+            logger.error(f"Error in main GUI overlay update: {e}")
+
+        # Update at 15 FPS (approx 66ms delay) for smooth visualization without GUI overhead
+        self.root.after(66, self._update_overlay_loop)
+
     # ═══════════════════════════════════════════════════════
     # Core Bot Handler Callbacks
     # ═══════════════════════════════════════════════════════
@@ -3011,12 +3057,29 @@ if __name__ == "__main__":
             ]
 
     class MockOverlay:
+        def __init__(self):
+            self.gui_active = False
         def toggle(self):
+            pass
+        def update_once(self):
             pass
 
     class MockCombat:
         def __init__(self):
             self.active_class = "custom"
+            self.combo_enabled = True
+            self.attack_range = 300
+            self.combo_sequence = ["3", "9", "5", "1"]
+            self.combo_cooldowns = {"3": 8.0, "9": 5.0, "5": 10.0, "1": 0.0}
+            self._combo_step = 0
+            self._combo_last_used = {}
+            self.macro_enabled = False
+            self.active_macro_profile = "default"
+            self.macro_slots = []
+            self.prioritize_elites = True
+            self.auto_dodge_boss_aoe = True
+            self.mana_conservation = False
+            self._macro_last_used = {}
 
         def get_status(self):
             return {
@@ -3035,7 +3098,20 @@ if __name__ == "__main__":
             self.active_class = class_name
 
     class MockNavigation:
+        def __init__(self):
+            self.active_map_name = "q5 map"
+            self.waypoints = []
+            self.current_index = 0
+            self.player_minimap_pos = (100, 100)
+            self.move_delay = 0.5
+
         def record_mouse_position(self):
+            pass
+
+        def _save_waypoints(self):
+            pass
+
+        def load_waypoints_from_file(self, path):
             pass
 
     gui = MainGUI(

@@ -131,7 +131,9 @@ def train():
         patience=20,        # Early stopping
         save=True,
         plots=True,
-        verbose=True
+        verbose=True,
+        workers=2,          # Optimize dataloader
+        cache=True          # Cache images in RAM for speed
     )
 
     # Copy best weights to detection/models/

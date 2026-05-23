@@ -534,6 +534,10 @@ def is_game_running() -> bool:
         for w in gw.getAllWindows():
             title = w.title.lower().strip()
             if title and any(frag in title for frag in GAME_WINDOW_TITLES):
+                # Filter out IDEs, terminals, explorers, and bot windows
+                skip_keywords = ["visual studio", "vscode", "code", "cmd", "powershell", "control panel", "login", "python", "explorer"]
+                if any(skip in title for skip in skip_keywords):
+                    continue
                 return True
     except Exception:
         pass

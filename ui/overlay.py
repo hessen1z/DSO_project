@@ -88,6 +88,12 @@ class Overlay:
         self._running = False
         self._thread = None
         self._visible = False
+        self.gui_active = False
+
+        # Tkinter window references for safe GUI thread rendering
+        self._overlay_window = None
+        self._canvas = None
+        self._photo_image = None
 
         logger.info(f"Overlay initialized | Enabled: {self.enabled}")
 
@@ -344,7 +350,7 @@ class Overlay:
         logger.info("Overlay thread stopped")
 
     def start(self):
-        """Start the overlay thread."""
+        """Start the overlay. Bypasses thread creation if running in GUI mode."""
         if not self.enabled:
             logger.info("Overlay disabled in config")
             return
@@ -353,17 +359,181 @@ class Overlay:
             return
 
         self._running = True
-        self._thread = threading.Thread(target=self._overlay_loop, daemon=True, name="OverlayThread")
-        self._thread.start()
-        logger.info("Overlay started")
+        if self.gui_active:
+            logger.info("Overlay starting in GUI mode (main-thread updates only)")
+        else:
+            self._thread = threading.Thread(target=self._overlay_loop, daemon=True, name="OverlayThread")
+            self._thread.start()
+            logger.info("Overlay thread started")
 
     def stop(self):
-        """Stop the overlay thread."""
+        """Stop the overlay."""
         self._running = False
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=3.0)
         self._thread = None
+        
+        # Clean up any residual Tkinter window
+        if hasattr(self, "_overlay_window") and self._overlay_window:
+            try:
+                self._overlay_window.destroy()
+            except Exception:
+                pass
+            self._overlay_window = None
+            self._canvas = None
+            self._photo_image = None
+
+        # Clean up any residual cv2 window
+        if getattr(self, "_window_created", False) or hasattr(self, "_overlay_loop"):
+            try:
+                cv2.destroyWindow(self._window_name)
+            except Exception:
+                pass
+            self._window_created = False
+            
         logger.info("Overlay stopped")
+
+    def update_once(self):
+        """Process and draw overlay once. Designed to be called safely on the main GUI thread."""
+        if not self._running:
+            return
+
+        try:
+            # GUI active mode - render inside a beautiful Tkinter Toplevel window using PIL
+            if self.gui_active:
+                if not self._visible:
+                    if self._overlay_window:
+                        try:
+                            self._overlay_window.destroy()
+                        except Exception:
+                            pass
+                        self._overlay_window = None
+                        self._canvas = None
+                        self._photo_image = None
+                    return
+
+                # Create Toplevel overlay window if not exists
+                if not self._overlay_window:
+                    import tkinter as tk
+                    self._overlay_window = tk.Toplevel()
+                    self._overlay_window.title("DRAKENSANG AI — Live Vision Feed")
+                    self._overlay_window.geometry("960x540")
+                    self._overlay_window.resizable(False, False)
+                    self._overlay_window.configure(bg="#0c0d12")
+                    
+                    # Styled top bar or label
+                    self._overlay_window.overrideredirect(False)
+                    
+                    # Clean handle for close button
+                    def on_close():
+                        self._visible = False
+                        if self._overlay_window:
+                            try:
+                                self._overlay_window.destroy()
+                            except Exception:
+                                pass
+                            self._overlay_window = None
+                            self._canvas = None
+                            self._photo_image = None
+                    self._overlay_window.protocol("WM_DELETE_WINDOW", on_close)
+
+                    self._canvas = tk.Canvas(self._overlay_window, width=960, height=540, bg="#0c0d12", highlightthickness=0)
+                    self._canvas.pack(fill=tk.BOTH, expand=True)
+
+                # Get frame
+                frame = self.capture.frame if self.capture else None
+                if frame is None:
+                    return
+
+                # Process display BGR image
+                h, w = frame.shape[:2]
+                display = cv2.resize(frame, (w // 2, h // 2))
+
+                # Scale and draw detections
+                if self.detector:
+                    detections = self.detector.detections
+                    scaled_detections = []
+                    for det in detections:
+                        from detection.yolo_detector import Detection
+                        scaled = Detection(
+                            class_name=det.class_name,
+                            confidence=det.confidence,
+                            bbox=(det.bbox[0]//2, det.bbox[1]//2, det.bbox[2]//2, det.bbox[3]//2),
+                            class_id=det.class_id
+                        )
+                        scaled_detections.append(scaled)
+                    display = self._draw_detections(display, scaled_detections)
+
+                display = self._draw_state_panel(display)
+                display = self._draw_fps(display)
+                display = self._draw_target_indicator(display)
+
+                # Convert display BGR numpy array to PIL ImageTk.PhotoImage
+                from PIL import Image, ImageTk
+                rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(rgb)
+                
+                # Create photo image and render on canvas
+                self._photo_image = ImageTk.PhotoImage(image=pil_img)
+                self._canvas.delete("all")
+                self._canvas.create_image(0, 0, anchor="nw", image=self._photo_image)
+                return
+
+            # Non-GUI mode - fallback to cv2.imshow
+            if not self._visible:
+                if getattr(self, "_window_created", False):
+                    try:
+                        cv2.destroyWindow(self._window_name)
+                    except Exception:
+                        pass
+                    self._window_created = False
+                return
+
+            if not getattr(self, "_window_created", False):
+                cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
+                cv2.resizeWindow(self._window_name, 960, 540)
+                self._window_created = True
+
+            # Get current frame
+            frame = self.capture.frame if self.capture else None
+            if frame is None:
+                return
+
+            # Resize for overlay display (half resolution for performance)
+            h, w = frame.shape[:2]
+            display = cv2.resize(frame, (w // 2, h // 2))
+
+            # Get detections (scale boxes to half resolution)
+            if self.detector:
+                detections = self.detector.detections
+                scaled_detections = []
+                for det in detections:
+                    from detection.yolo_detector import Detection
+                    scaled = Detection(
+                        class_name=det.class_name,
+                        confidence=det.confidence,
+                        bbox=(det.bbox[0]//2, det.bbox[1]//2, det.bbox[2]//2, det.bbox[3]//2),
+                        class_id=det.class_id
+                    )
+                    scaled_detections.append(scaled)
+                display = self._draw_detections(display, scaled_detections)
+
+            # Draw overlays
+            display = self._draw_state_panel(display)
+            display = self._draw_fps(display)
+            display = self._draw_target_indicator(display)
+
+            # Show frame
+            cv2.imshow(self._window_name, display)
+
+            # Handle key press (1ms wait)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                logger.info("Overlay closed by user (Q)")
+                self._visible = False
+
+        except Exception as e:
+            logger.error(f"Overlay single update error: {e}")
 
     def toggle(self):
         """Toggle overlay visibility."""

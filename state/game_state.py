@@ -171,6 +171,11 @@ class GameState:
             return len(self._loot_items) > 0
 
     @property
+    def portals(self) -> list:
+        with self._lock:
+            return self._portals.copy()
+
+    @property
     def all_targets(self) -> list:
         """Get all combat targets (enemies + elites + bosses)."""
         with self._lock:

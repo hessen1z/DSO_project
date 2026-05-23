@@ -114,6 +114,25 @@ class Humanizer:
 
         return points
 
+    def is_game_active(self) -> bool:
+        """
+        Check if Drakensang Online is the currently active (foreground) window.
+        Prevents sending clicks/keys to the desktop or other applications.
+        """
+        try:
+            import pygetwindow as gw
+            active_win = gw.getActiveWindow()
+            if active_win:
+                t = active_win.title.lower().strip()
+                if any(frag in t for frag in ["drakensang", "bigpoint"]):
+                    # Filter out IDEs, terminals, explorers, and bot windows
+                    skip_keywords = ["visual studio", "vscode", "code", "cmd", "powershell", "control panel", "login", "python", "explorer"]
+                    if not any(skip in t for skip in skip_keywords):
+                        return True
+        except Exception:
+            pass
+        return False
+
     def move_mouse(self, x: int, y: int, speed: float = None):
         """
         Move mouse to position with optional Bézier curve.
@@ -123,6 +142,10 @@ class Humanizer:
             y: Target Y position
             speed: Movement speed in seconds (None = use default)
         """
+        if not self.is_game_active():
+            logger.warning("Input blocked: Drakensang Online is not the active window!")
+            return
+
         speed = speed or self.mouse_speed
 
         if self.enabled and self.mouse_curve:
@@ -165,6 +188,10 @@ class Humanizer:
             button: Mouse button ('left', 'right', 'middle')
             clicks: Number of clicks
         """
+        if not self.is_game_active():
+            logger.warning("Input blocked: Drakensang Online is not the active window!")
+            return
+
         if x is not None and y is not None:
             # Add offset for human-like targeting
             tx, ty = self._add_offset(x, y)
@@ -187,6 +214,10 @@ class Humanizer:
         Args:
             key: Key to press (e.g., '1', 'f1', 'space')
         """
+        if not self.is_game_active():
+            logger.warning("Input blocked: Drakensang Online is not the active window!")
+            return
+
         self._random_delay(0.01, 0.04)
         pyautogui.press(key)
         self._random_delay(0.02, 0.06)
@@ -199,6 +230,10 @@ class Humanizer:
             key: Key to hold
             duration: Hold duration in seconds
         """
+        if not self.is_game_active():
+            logger.warning("Input blocked: Drakensang Online is not the active window!")
+            return
+
         if self.enabled:
             duration += random.uniform(-0.05, 0.1)
             duration = max(0.1, duration)
@@ -215,6 +250,10 @@ class Humanizer:
         Args:
             text: Text to type
         """
+        if not self.is_game_active():
+            logger.warning("Input blocked: Drakensang Online is not the active window!")
+            return
+
         for char in text:
             pyautogui.press(char)
             if self.enabled:
@@ -230,6 +269,10 @@ class Humanizer:
             center_y: Center Y position
             radius: Maximum radius of random movement
         """
+        if not self.is_game_active():
+            logger.warning("Input blocked: Drakensang Online is not the active window!")
+            return
+
         angle = random.uniform(0, 2 * math.pi)
         dist = random.uniform(20, radius)
         target_x = int(center_x + dist * math.cos(angle))
