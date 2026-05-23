@@ -157,17 +157,58 @@ class WaypointSystem:
     # =========================================================
 
     def _execute_classic_navigation(self, waypoint: dict):
-        """Click on the waypoint screen coordinate to move the character."""
+        """Click on the waypoint screen coordinate to move the character.
+
+        Supports typed interaction nodes:
+            move        - right-click to walk (default)
+            portal      - right-click + optional key press + wait
+            chest       - right-click + wait for loot animation
+            bag         - right-click + wait for loot animation
+            teleporter  - right-click + wait for loading screen
+        """
         target_x = waypoint.get("x", 960)
         target_y = waypoint.get("y", 540)
+        node_type = waypoint.get("type", "move")
+        wait_time = waypoint.get("wait", 0.0)
+        extra_key = waypoint.get("key", None)
 
-        if self.move_click == "right":
+        if node_type == "move":
+            if self.move_click == "right":
+                self.input.right_click(target_x, target_y)
+            else:
+                self.input.click(target_x, target_y)
+
+        elif node_type == "portal":
+            # Click the portal then optionally press an activation key
             self.input.right_click(target_x, target_y)
+            time.sleep(0.8)
+            if extra_key:
+                self.input.press_key(extra_key)
+                logger.info(f"Portal node: pressed '{extra_key}' after click")
+            if wait_time > 0:
+                logger.info(f"Portal node: waiting {wait_time}s for map load...")
+                time.sleep(wait_time)
+
+        elif node_type in ("chest", "bag"):
+            # Click to open, then wait for loot animation
+            self.input.right_click(target_x, target_y)
+            logger.info(f"{node_type.capitalize()} node: opened at ({target_x},{target_y}), waiting {wait_time}s")
+            if wait_time > 0:
+                time.sleep(wait_time)
+
+        elif node_type == "teleporter":
+            # Click the teleporter / use the item, wait for transition
+            self.input.right_click(target_x, target_y)
+            logger.info(f"Teleporter node: activated at ({target_x},{target_y}), waiting {wait_time}s")
+            if wait_time > 0:
+                time.sleep(wait_time)
+
         else:
-            self.input.click(target_x, target_y)
+            # Unknown type — treat as regular move
+            self.input.right_click(target_x, target_y)
 
         logger.debug(
-            f"Classic nav → waypoint {self._current_waypoint_index}: ({target_x}, {target_y})"
+            f"Classic nav [{node_type}] → waypoint {self._current_waypoint_index}: ({target_x}, {target_y})"
         )
         self._advance_waypoint()
 

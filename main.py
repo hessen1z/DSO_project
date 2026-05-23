@@ -452,7 +452,11 @@ class DrakensangBot:
             try:
                 if key == start_stop_key:
                     self.log.info("Hotkey: Toggle Bot")
-                    self.toggle_bot()
+                    # Run toggle on a background thread so the pynput listener
+                    # never blocks (start_bot has a 0.5s sleep; stop_bot joins
+                    # threads — both would freeze the keyboard hook otherwise).
+                    threading.Thread(target=self.toggle_bot, daemon=True,
+                                     name="HotkeyToggleBot").start()
                 elif key == record_key:
                     self.log.info("Hotkey: Record Waypoint")
                     self.navigation.record_mouse_position()
@@ -516,16 +520,66 @@ class DrakensangBot:
 # Entry Point
 # =========================================================
 
+def is_game_running() -> bool:
+    """
+    Check if Drakensang Online is currently running (window or process).
+    Returns True if the game is detected, False otherwise.
+    """
+    GAME_WINDOW_TITLES = ["drakensang online", "bigpoint", "drakensang"]
+    GAME_EXE_NAMES     = ["drakensang.exe", "dso.exe", "bigpoint.exe"]
+
+    # 1. Try window title check
+    try:
+        import pygetwindow as gw
+        for w in gw.getAllWindows():
+            title = w.title.lower().strip()
+            if title and any(frag in title for frag in GAME_WINDOW_TITLES):
+                return True
+    except Exception:
+        pass
+
+    # 2. Fallback: process name check
+    try:
+        import psutil
+        for proc in psutil.process_iter(["name"]):
+            try:
+                pname = proc.info["name"].lower()
+                if any(exe in pname for exe in GAME_EXE_NAMES):
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except Exception:
+        pass
+
+    return False
+
+
 def launch_with_gui():
     """
     Launch the bot with GUI flow:
-    1. Show Login Window → authenticate user
-    2. Initialize DrakensangBot
-    3. Show Main GUI Control Panel
-    4. Bot runs via hotkeys + GUI controls
+    1. Verify Drakensang Online is running
+    2. Show Login Window → authenticate user
+    3. Initialize DrakensangBot
+    4. Show Main GUI Control Panel
+    5. Bot runs via hotkeys + GUI controls
     """
+    import tkinter as tk
+    from tkinter import messagebox
     from ui.login_window import LoginWindow
     from ui.main_gui import MainGUI
+
+    # ── Step 0: Verify the game is running before doing anything ──────────
+    if not is_game_running():
+        root = tk.Tk()
+        root.withdraw()  # Hide the blank root window
+        messagebox.showerror(
+            "Drakensang Online Not Found",
+            "❌ Drakensang Online is not running!\n\n"
+            "Please launch the game first, then start the bot."
+        )
+        root.destroy()
+        print("[EXIT] Game not detected. Please launch Drakensang Online first.")
+        return
 
     authenticated = False
     credentials = {}
