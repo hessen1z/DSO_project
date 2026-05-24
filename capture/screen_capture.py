@@ -38,6 +38,7 @@ class ScreenCapture:
         self.region = config.get("region", None)
         self.target_fps = config.get("fps", 60)
         self.frame_interval = 1.0 / self.target_fps
+        self.capture_method = config.get("method", "pil")  # Default to PIL for dual-GPU/hybrid stability
 
         # Thread-safe frame buffer
         self._frame = None
@@ -51,7 +52,7 @@ class ScreenCapture:
         self._running = False
         self._thread = None
 
-        logger.info(f"ScreenCapture initialized | Monitor: {self.monitor_index} | Target FPS: {self.target_fps}")
+        logger.info(f"ScreenCapture initialized | Method: {self.capture_method.upper()} | Monitor: {self.monitor_index} | Target FPS: {self.target_fps}")
 
     @property
     def frame(self) -> np.ndarray:

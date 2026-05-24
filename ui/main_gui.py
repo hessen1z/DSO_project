@@ -7,6 +7,10 @@ live interactive charts (donut and bar charts), a target tracker,
 and a right sidebar user profile & alert notifications.
 """
 
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import tkinter as tk
 from tkinter import scrolledtext
 from tkinter import messagebox
@@ -14,6 +18,9 @@ import threading
 import time
 import math
 import logging
+from utils.logger import get_logger
+
+logger = get_logger("gui")
 import random
 import glob
 import os
@@ -172,6 +179,12 @@ class MainGUI:
         # Start core loops
         self._update_stats_loop()
         self._animate_accent()
+        
+        # Configure and start safe main-thread overlay loop
+        if hasattr(self.bot, "overlay") and self.bot.overlay:
+            self.bot.overlay.gui_active = True
+            self._update_overlay_loop()
+            
         # Handle close
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -595,16 +608,21 @@ class MainGUI:
             import pygetwindow as gw
             import psutil
 
-            GAME_WINDOW_TITLES = ["Drakensang Online", "Bigpoint", "drakensang"]
+            GAME_WINDOW_TITLES = ["drakensang online", "bigpoint"]
             GAME_EXE_NAMES     = ["drakensang.exe", "dso.exe", "bigpoint.exe"]
 
             self._append_log("Searching for Drakensang Online process...", "warning")
 
             # ── 1. Try to find via window title ──────────────────────
             found_window = None
+            skip_keywords = ["visual studio", "vscode", "code", "cmd", "powershell", "control panel", "login", "python", "explorer"]
             for title_fragment in GAME_WINDOW_TITLES:
-                matches = [w for w in gw.getAllWindows()
-                           if title_fragment.lower() in w.title.lower() and w.title.strip()]
+                matches = []
+                for w in gw.getAllWindows():
+                    t = w.title.lower().strip()
+                    if title_fragment in t and t:
+                        if not any(skip in t for skip in skip_keywords):
+                            matches.append(w)
                 if matches:
                     found_window = matches[0]
                     break
@@ -885,21 +903,34 @@ class MainGUI:
         
         if raw_detections:
             for det in raw_detections:
-                label = det.get('label', 'enemy')
-                bbox = det.get('bbox', None)
-                if bbox:
-                    # Map bbox center relative to screen center
-                    x, y, bw, bh = bbox
-                    dcx = x + bw/2
-                    dcy = y + bh/2
-                    rx = (dcx - 320) / 320.0
-                    ry = (dcy - 240) / 240.0
-                    
-                    px = cx + rx * r_max * 0.9
-                    py = cy + ry * r_max * 0.9
-                    
-                    col = COLORS["error"] if "enemy" in label.lower() or "mob" in label.lower() else COLORS["success"] if "loot" in label.lower() else COLORS["gold"]
-                    canvas.create_oval(px - 3, py - 3, px + 3, py + 3, fill=col, outline="")
+                # Support both Detection objects and raw dicts
+                if hasattr(det, 'class_name'):
+                    label = det.class_name
+                    bbox = det.bbox
+                    if bbox:
+                        x, y = bbox[0], bbox[1]
+                        bw, bh = det.width, det.height
+                    else:
+                        continue
+                else:
+                    label = det.get('label', 'enemy')
+                    bbox = det.get('bbox', None)
+                    if bbox:
+                        x, y, bw, bh = bbox
+                    else:
+                        continue
+                
+                # Map bbox center relative to screen center
+                dcx = x + bw/2
+                dcy = y + bh/2
+                rx = (dcx - 320) / 320.0
+                ry = (dcy - 240) / 240.0
+                
+                px = cx + rx * r_max * 0.9
+                py = cy + ry * r_max * 0.9
+                
+                col = COLORS["error"] if "enemy" in label.lower() or "mob" in label.lower() else COLORS["success"] if "loot" in label.lower() else COLORS["gold"]
+                canvas.create_oval(px - 3, py - 3, px + 3, py + 3, fill=col, outline="")
 
         self.root.after(30, self._animate_radar)
 
@@ -1002,6 +1033,44 @@ class MainGUI:
         self._build_btn(ac, "📍 RECORD MAP WAYPOINT", self._record_waypoint)
         self._build_btn(ac, "📸 CAPTURE TRAINING SCREENSHOT", self._capture_screenshot)
         self._build_btn(ac, "💾 TOGGLE AUTO DATASET CAPTURE", self._toggle_auto_capture)
+
+        # --- Minimap Nav Mode Toggle ---
+        mm_sep = tk.Frame(ac, bg=COLORS["border"], height=1)
+        mm_sep.pack(fill=tk.X, padx=12, pady=(8, 4))
+
+        mm_row = tk.Frame(ac, bg=COLORS["bg_card"])
+        mm_row.pack(fill=tk.X, padx=12, pady=(0, 8))
+
+        tk.Label(
+            mm_row, text="🗺  NAV MODE", bg=COLORS["bg_card"],
+            fg=COLORS["text_secondary"], font=("Segoe UI", 8, "bold")
+        ).pack(side=tk.LEFT)
+
+        def _toggle_minimap_nav():
+            if hasattr(self.bot, 'navigation') and self.bot.navigation:
+                nav = self.bot.navigation
+                nav.minimap_enabled = not nav.minimap_enabled
+                mode = "MINIMAP" if nav.minimap_enabled else "CLASSIC"
+                color = COLORS["info"] if nav.minimap_enabled else COLORS["success"]
+                self._mm_nav_lbl.config(text=mode, fg=color)
+                self._append_log(
+                    f"Navigation mode switched to: {mode}",
+                    "warning"
+                )
+
+        is_mm = False
+        if hasattr(self.bot, 'navigation') and self.bot.navigation:
+            is_mm = getattr(self.bot.navigation, 'minimap_enabled', False)
+
+        mm_mode_txt = "MINIMAP" if is_mm else "CLASSIC"
+        mm_mode_clr = COLORS["info"] if is_mm else COLORS["success"]
+
+        self._mm_nav_lbl = tk.Label(
+            mm_row, text=mm_mode_txt, bg=COLORS["bg_card"],
+            fg=mm_mode_clr, font=("Segoe UI", 8, "bold"), cursor="hand2"
+        )
+        self._mm_nav_lbl.pack(side=tk.RIGHT)
+        self._mm_nav_lbl.bind("<Button-1>", lambda e: _toggle_minimap_nav())
 
         # 2. General Stats Card
         stats_card = ModernCard(grid, bg=COLORS["bg_card"], border_color=COLORS["border"], radius=12)
@@ -1196,6 +1265,42 @@ class MainGUI:
         )
         self.path_type_dropdown.pack(fill=tk.X, pady=(0, 8))
 
+        # --- Node Type Selector (what the next click will place) ---
+        tk.Label(
+            cc, text="NEXT NODE TYPE",
+            bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
+            font=("Segoe UI", 7, "bold")
+        ).pack(anchor="w", pady=(0, 2))
+
+        # Colour legend row
+        legend_frame = tk.Frame(cc, bg=COLORS["bg_card"])
+        legend_frame.pack(fill=tk.X, pady=(0, 3))
+        NODE_COLORS = {
+            "move": "#00ffff", "portal": "#ff8800",
+            "chest": "#ffdd00", "bag": "#cc66ff", "teleporter": "#ff4444"
+        }
+        for ntype, nc in NODE_COLORS.items():
+            tk.Label(legend_frame, text="●", fg=nc, bg=COLORS["bg_card"],
+                     font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT)
+            tk.Label(legend_frame, text=ntype, fg=COLORS["text_dim"], bg=COLORS["bg_card"],
+                     font=("Segoe UI", 6)).pack(side=tk.LEFT, padx=(0, 4))
+
+        node_types = ["move", "portal", "chest", "bag", "teleporter"]
+        self.node_type_var = tk.StringVar(value="move")
+        node_type_dropdown = tk.OptionMenu(cc, self.node_type_var, *node_types)
+        node_type_dropdown.config(
+            bg=COLORS["bg_card_inner"], fg=COLORS["text_primary"],
+            font=("Segoe UI", 8, "bold"), highlightthickness=0,
+            activebackground=COLORS["red_primary"], activeforeground="white",
+            relief="flat", bd=0, cursor="hand2"
+        )
+        node_type_dropdown["menu"].config(
+            bg=COLORS["bg_card_inner"], fg=COLORS["text_primary"],
+            font=("Segoe UI", 8), activebackground=COLORS["red_primary"],
+            activeforeground="white", bd=0
+        )
+        node_type_dropdown.pack(fill=tk.X, pady=(0, 8))
+
         # --- Map File Name Input (for creating new paths) ---
         tk.Label(
             cc, text="ACTIVE MAP PATH NAME", 
@@ -1229,7 +1334,7 @@ class MainGUI:
             bd=0, relief="flat", highlightthickness=1, highlightbackground=COLORS["border"]
         )
         self.screen_w_entry.pack(side=tk.LEFT, padx=(2, 4), ipady=1)
-        self.screen_w_entry.insert(0, "1920")
+        self.screen_w_entry.insert(0, "1366")
 
         tk.Label(res_frame, text="H:", bg=COLORS["bg_card"], fg=COLORS["text_dim"], font=("Segoe UI", 8)).pack(side=tk.LEFT)
         self.screen_h_entry = tk.Entry(
@@ -1238,7 +1343,7 @@ class MainGUI:
             bd=0, relief="flat", highlightthickness=1, highlightbackground=COLORS["border"]
         )
         self.screen_h_entry.pack(side=tk.LEFT, padx=(2, 0), ipady=1)
-        self.screen_h_entry.insert(0, "1080")
+        self.screen_h_entry.insert(0, "768")
 
         # --- Live Navigation Info Card ---
         tk.Label(
@@ -1266,10 +1371,19 @@ class MainGUI:
 
         # Instructions / Help box
         help_box = tk.Label(
-            cc, text="💡 Click map to add waypoints.\n- Plotted dots connect in a loop.\n- Toggle in-game TAB map for live dot.",
+            cc,
+            text=(
+                "💡 HOW TO USE:\n"
+                "1. Set W/H to your game resolution\n"
+                "2. Choose Node Type (move/portal/chest…)\n"
+                "3. Click on the map image to place nodes\n"
+                "4. Save → bot follows in order\n\n"
+                "🔵 move  🟠 portal  🟡 chest\n"
+                "🟣 bag   🔴 teleporter"
+            ),
             bg=COLORS["bg_card_inner"], fg=COLORS["text_dim"],
             font=("Segoe UI", 7), justify=tk.LEFT, anchor="w",
-            padx=4, pady=3, bd=1, relief="solid", highlightbackground=COLORS["border"]
+            padx=4, pady=4, bd=1, relief="solid", highlightbackground=COLORS["border"]
         )
         help_box.pack(fill=tk.X, side=tk.BOTTOM, pady=3)
 
@@ -1357,41 +1471,46 @@ class MainGUI:
     def _on_canvas_click(self, event):
         """Handle canvas left clicks to place waypoints."""
         cx, cy = event.x, event.y
-        
+
         # Boundaries validation
         if cx < 0 or cx > 520 or cy < 0 or cy > 390:
             return
-            
-        # Get canvas scaling factors (canvas is 520x390, image is _map_img_w x _map_img_h)
-        scale_x = 520.0 / self._map_img_w
-        scale_y = 390.0 / self._map_img_h
-        ix = cx / scale_x
-        iy = cy / scale_y
-        
-        # Get screen calibration variables
+
+        # Get game screen resolution from the calibration fields
         try:
             W = int(self.screen_w_entry.get())
             H = int(self.screen_h_entry.get())
         except ValueError:
-            W, H = 1920, 1080
-            
-        # Calculate transparent map overlay boundaries on the 1920x1080 (or WxH) screen
-        MW = W * 0.625
-        MH = H * 0.833
-        Left = (W - MW) / 2
-        Top = (H - MH) / 2
-        
-        # Map back to full-screen in-game overlay coordinates
-        mx = int(Left + (ix / self._map_img_w) * MW)
-        my = int(Top + (iy / self._map_img_h) * MH)
-        
-        # Store waypoint
-        wp = {"x": mx, "y": my, "mx": mx, "my": my}
+            W, H = 1366, 768
+
+        # Map canvas pixel (0..520, 0..390) → game screen pixel (0..W, 0..H)
+        # The map image represents the entire game viewport, so it's a direct
+        # proportional mapping — no Tab overlay math needed.
+        sx = int((cx / 520.0) * W)
+        sy = int((cy / 390.0) * H)
+
+        # Get selected node type
+        node_type = getattr(self, 'node_type_var', None)
+        node_type = node_type.get() if node_type else "move"
+
+        # Build waypoint dict
+        wp = {"x": sx, "y": sy, "type": node_type}
+
+        # Interaction nodes may need extra wait time
+        default_waits = {"portal": 3.0, "chest": 1.5, "bag": 1.5, "teleporter": 4.0}
+        if node_type in default_waits:
+            wp["wait"] = default_waits[node_type]
+        if node_type == "portal":
+            wp["key"] = "enter"   # default — user can edit JSON directly
+
         self.editor_waypoints.append(wp)
-        
+
         # Redraw
         self._redraw_editor_waypoints()
-        self._append_log(f"Placed waypoint #{len(self.editor_waypoints)} at screen ({mx}, {my})", "info")
+        self._append_log(
+            f"Placed [{node_type.upper()}] node #{len(self.editor_waypoints)} → screen ({sx}, {sy})",
+            "info"
+        )
 
     def _redraw_editor_waypoints(self):
         """Redraw waypoints, danger zones, and sequential dashed lines on the editor canvas."""
@@ -1439,23 +1558,25 @@ class MainGUI:
             W = int(self.screen_w_entry.get())
             H = int(self.screen_h_entry.get())
         except ValueError:
-            W, H = 1920, 1080
+            W, H = 1366, 768
 
-        MW = W * 0.625
-        MH = H * 0.833
-        Left = (W - MW) / 2
-        Top = (H - MH) / 2
+        # Node type → dot colour mapping
+        NODE_DOT_COLORS = {
+            "move":        "#00ffff",
+            "portal":      "#ff8800",
+            "chest":       "#ffdd00",
+            "bag":         "#cc66ff",
+            "teleporter":  "#ff4444",
+        }
 
         coords = []
         for i, wp in enumerate(self.editor_waypoints):
-            # Scale overlay coordinate back to canvas coordinates
-            mx = wp.get("mx", wp.get("x", 960))
-            my = wp.get("my", wp.get("y", 540))
-            
-            ix = ((mx - Left) / MW) * self._map_img_w
-            iy = ((my - Top) / MH) * self._map_img_h
-            cx = ix * (520.0 / self._map_img_w)
-            cy = iy * (390.0 / self._map_img_h)
+            # Reverse-map screen coord → canvas pixel
+            # screen (0..W, 0..H) → canvas (0..520, 0..390)
+            sx = wp.get("x", 683)
+            sy = wp.get("y", 384)
+            cx = (sx / W) * 520.0
+            cy = (sy / H) * 390.0
             coords.append((cx, cy))
 
             # Fetch active target from bot
@@ -1465,23 +1586,26 @@ class MainGUI:
                     if self.bot.navigation.current_index == i:
                         is_active_target = True
 
-            # Draw glowing green/red/gold dot for waypoint
-            if is_active_target:
-                color = COLORS["gold"]
-                outline_color = "#ffffff"
-                dot_size = 8
-            else:
-                color = COLORS["success"] if i == 0 else COLORS["error"]
-                outline_color = COLORS["gold"]
-                dot_size = 6
-                
+            # Choose dot colour by node type
+            node_type = wp.get("type", "move")
+            color = NODE_DOT_COLORS.get(node_type, "#00ffff")
+            outline_color = "#ffffff" if is_active_target else COLORS["gold"]
+            dot_size = 9 if is_active_target else 6
+
             self.editor_canvas.create_oval(
                 cx - dot_size, cy - dot_size, cx + dot_size, cy + dot_size,
-                fill=color, outline=outline_color, width=1.5 if is_active_target else 1, tags="wp"
+                fill=color, outline=outline_color,
+                width=2 if is_active_target else 1, tags="wp"
             )
-            
-            # Label
-            self.editor_canvas.create_text(cx, cy - 14, text=str(i + 1), fill=COLORS["text_primary"], font=("Segoe UI", 8, "bold"), tags="wp")
+
+            # Node type icon + number label
+            type_icons = {"move": "", "portal": "🚪", "chest": "📦", "bag": "💼", "teleporter": "🔮"}
+            icon = type_icons.get(node_type, "")
+            label = f"{icon}{i + 1}"
+            self.editor_canvas.create_text(
+                cx, cy - 14, text=label,
+                fill=COLORS["text_primary"], font=("Segoe UI", 8, "bold"), tags="wp"
+            )
 
         # Determine connecting line colors based on path type
         path_type = self.path_type_var.get() if hasattr(self, 'path_type_var') else "⚔️ Farming Loop"
@@ -1492,19 +1616,22 @@ class MainGUI:
         elif "Loot" in path_type:
             base_line_color = "#ffcc00"
         else:
-            base_line_color = "#00ffff" # Cyan default
+            base_line_color = "#00ffff"
 
         # Draw connecting lines
         for i in range(len(coords)):
             c1 = coords[i]
-            c2 = coords[(i + 1) % len(coords)] # Loop back to first point
-            
+            c2 = coords[(i + 1) % len(coords)]
+
             is_loop_back = (i == len(coords) - 1)
             line_color = COLORS["gold"] if is_loop_back else base_line_color
             line_dash = (3, 3) if is_loop_back else None
-            
+
             if len(coords) > 1:
-                self.editor_canvas.create_line(c1[0], c1[1], c2[0], c2[1], fill=line_color, dash=line_dash, width=1.5, tags="wp")
+                self.editor_canvas.create_line(
+                    c1[0], c1[1], c2[0], c2[1],
+                    fill=line_color, dash=line_dash, width=1.5, tags="wp"
+                )
 
     def _save_editor_path(self):
         """Save the editor waypoints to the JSON file."""
@@ -2638,6 +2765,21 @@ class MainGUI:
 
         self.root.after(30, self._animate_accent)
 
+    def _update_overlay_loop(self):
+        """Periodically trigger overlay updates safely from the main GUI thread."""
+        if not self._running:
+            return
+
+        try:
+            if hasattr(self.bot, "overlay") and self.bot.overlay:
+                if hasattr(self.bot.overlay, "update_once"):
+                    self.bot.overlay.update_once()
+        except Exception as e:
+            logger.error(f"Error in main GUI overlay update: {e}")
+
+        # Update at 15 FPS (approx 66ms delay) for smooth visualization without GUI overhead
+        self.root.after(66, self._update_overlay_loop)
+
     # ═══════════════════════════════════════════════════════
     # Core Bot Handler Callbacks
     # ═══════════════════════════════════════════════════════
@@ -2915,12 +3057,29 @@ if __name__ == "__main__":
             ]
 
     class MockOverlay:
+        def __init__(self):
+            self.gui_active = False
         def toggle(self):
+            pass
+        def update_once(self):
             pass
 
     class MockCombat:
         def __init__(self):
             self.active_class = "custom"
+            self.combo_enabled = True
+            self.attack_range = 300
+            self.combo_sequence = ["3", "9", "5", "1"]
+            self.combo_cooldowns = {"3": 8.0, "9": 5.0, "5": 10.0, "1": 0.0}
+            self._combo_step = 0
+            self._combo_last_used = {}
+            self.macro_enabled = False
+            self.active_macro_profile = "default"
+            self.macro_slots = []
+            self.prioritize_elites = True
+            self.auto_dodge_boss_aoe = True
+            self.mana_conservation = False
+            self._macro_last_used = {}
 
         def get_status(self):
             return {
@@ -2939,7 +3098,20 @@ if __name__ == "__main__":
             self.active_class = class_name
 
     class MockNavigation:
+        def __init__(self):
+            self.active_map_name = "q5 map"
+            self.waypoints = []
+            self.current_index = 0
+            self.player_minimap_pos = (100, 100)
+            self.move_delay = 0.5
+
         def record_mouse_position(self):
+            pass
+
+        def _save_waypoints(self):
+            pass
+
+        def load_waypoints_from_file(self, path):
             pass
 
     gui = MainGUI(

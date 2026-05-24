@@ -81,6 +81,10 @@ class WaypointSystem:
         self._last_minimap_frame = None   # Last minimap crop (for overlay debug)
         self._screen_w = 1920
         self._screen_h = 1080
+        
+        # --- Tab map state ---
+        self._latest_frame = None
+        self._last_dot_seen_time = 0
 
         # Config file path for saving waypoints
         self._config_path = os.path.join("config", "settings.json")
@@ -156,20 +160,161 @@ class WaypointSystem:
     # Classic Navigation (right-click screen waypoints)
     # =========================================================
 
+    def _detect_player_on_tab_map(self, frame: np.ndarray):
+        """
+        Detect player green dot on the large transparent Tab map overlay.
+        We exclude the top-right corner to avoid the top-right minimap dot.
+        """
+        if frame is None:
+            return None
+            
+        try:
+            h, w = frame.shape[:2]
+            
+            # Define mask to exclude top-right minimap region (minimap location)
+            # Top-right is roughly x > w * 0.75 and y < h * 0.35
+            search_area = frame.copy()
+            tr_x1 = int(w * 0.75)
+            tr_y2 = int(h * 0.35)
+            search_area[0:tr_y2, tr_x1:w] = 0 # Black out the top-right corner
+            
+            # Also black out the bottom UI bar (y > h * 0.85) to avoid green skill icons
+            bot_y1 = int(h * 0.85)
+            search_area[bot_y1:h, 0:w] = 0
+            
+            # Apply HSV mask
+            hsv = cv2.cvtColor(search_area, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, self._green_lower, self._green_upper)
+            
+            # Find contours of the green dot
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                # Sort by area size, choose the largest one
+                contours = sorted(contours, key=cv2.contourArea, reverse=True)
+                for c in contours:
+                    area = cv2.contourArea(c)
+                    if 2 <= area <= 200: # The green dot is small but not a single pixel
+                        M = cv2.moments(c)
+                        if M["m00"] > 0:
+                            cx = int(M["m10"] / M["m00"])
+                            cy = int(M["m01"] / M["m00"])
+                            return (cx, cy)
+        except Exception as e:
+            logger.error(f"Error detecting player on Tab map: {e}")
+        return None
+
     def _execute_classic_navigation(self, waypoint: dict):
-        """Click on the waypoint screen coordinate to move the character."""
+        """Click on the waypoint screen coordinate to move the character.
+        Upgraded to use high-precision green-dot tracking on the transparent Tab map.
+        """
         target_x = waypoint.get("x", 960)
         target_y = waypoint.get("y", 540)
+        node_type = waypoint.get("type", "move")
+        wait_time = waypoint.get("wait", 0.0)
+        extra_key = waypoint.get("key", "enter")
 
-        if self.move_click == "right":
+        # Check for YOLO portal detections on screen to auto-enter portals
+        portals = getattr(self.state, "portals", [])
+        if portals and (node_type == "portal" or self._current_waypoint_index >= len(self.waypoints) - 2):
+            logger.info("🌀 YOLO portal detected near path end — attempting to enter portal")
+            target_portal = portals[0] # Click the largest/first portal
+            self.input.right_click(target_portal.center_x, target_portal.center_y)
+            time.sleep(1.0)
+            self.input.press_key("enter") # standard DSO accept key
+            time.sleep(0.5)
+            self.input.press_key("tab") # close map overlay
+            time.sleep(3.0) # wait for loading screen
+            # Reset waypoints for the next run/map
+            self._current_waypoint_index = 0
+            return
+
+        # Try to detect player position on transparent Tab map
+        player_pos = None
+        if hasattr(self, '_latest_frame') and self._latest_frame is not None:
+            player_pos = self._detect_player_on_tab_map(self._latest_frame)
+
+        if node_type == "move":
+            now = time.time()
+            if player_pos is not None:
+                self._last_dot_seen_time = now
+                px, py = player_pos
+                dist = math.sqrt((target_x - px) ** 2 + (target_y - py) ** 2)
+                
+                # Check if we reached the waypoint
+                # If we are close, advance!
+                if dist < max(self.reached_threshold, 30):
+                    logger.info(f"📍 Tab Map Waypoint {self._current_waypoint_index} reached (dist={dist:.1f}px)")
+                    self._advance_waypoint()
+                    return
+
+                # Otherwise click the waypoint to keep moving towards it
+                logger.debug(f"Tab Map Navigation: clicking ({target_x}, {target_y}) | dist to wp={dist:.1f}px")
+                if self.move_click == "right":
+                    self.input.right_click(target_x, target_y)
+                else:
+                    self.input.click(target_x, target_y)
+            else:
+                # If player dot is not detected, check if we need to open the Tab map overlay
+                if now - getattr(self, '_last_dot_seen_time', 0) > 3.0:
+                    logger.info("🗺️ Player dot not seen on Tab map for 3 seconds — pressing TAB to toggle map overlay")
+                    self.input.press_key("tab")
+                    self._last_dot_seen_time = now
+                    # Wait slightly for the overlay map to open
+                    time.sleep(0.3)
+                    return
+
+                # If still not detected or mapping fallback, click and advance classic style (blind click-and-advance)
+                logger.debug(f"Classic blind nav: clicking ({target_x}, {target_y}) and advancing waypoint")
+                if self.move_click == "right":
+                    self.input.right_click(target_x, target_y)
+                else:
+                    self.input.click(target_x, target_y)
+                self._advance_waypoint()
+
+        elif node_type == "portal":
+            # Click the portal then optionally press an activation key
+            # If we have a YOLO portal detection on screen, click the YOLO detection!
+            # Otherwise click the recorded coordinates.
+            if portals:
+                target_portal = min(portals, key=lambda p: math.sqrt((p.center_x - target_x)**2 + (p.center_y - target_y)**2))
+                logger.info(f"YOLO detected portal at ({target_portal.center_x}, {target_portal.center_y})")
+                click_x, click_y = target_portal.center_x, target_portal.center_y
+            else:
+                click_x, click_y = target_x, target_y
+
+            self.input.right_click(click_x, click_y)
+            time.sleep(0.8)
+            if extra_key:
+                self.input.press_key(extra_key)
+                logger.info(f"Portal node: pressed '{extra_key}' after click")
+            if wait_time > 0:
+                logger.info(f"Portal node: waiting {wait_time}s for map load...")
+                time.sleep(wait_time)
+            
+            # Close map overlay so we have a clean transition
+            self.input.press_key("tab")
+            self._advance_waypoint()
+
+        elif node_type in ("chest", "bag"):
+            # Click to open, then wait for loot animation
             self.input.right_click(target_x, target_y)
-        else:
-            self.input.click(target_x, target_y)
+            logger.info(f"{node_type.capitalize()} node: opened at ({target_x},{target_y}), waiting {wait_time}s")
+            if wait_time > 0:
+                time.sleep(wait_time)
+            self._advance_waypoint()
 
-        logger.debug(
-            f"Classic nav → waypoint {self._current_waypoint_index}: ({target_x}, {target_y})"
-        )
-        self._advance_waypoint()
+        elif node_type == "teleporter":
+            # Click the teleporter / use the item, wait for transition
+            self.input.right_click(target_x, target_y)
+            logger.info(f"Teleporter node: activated at ({target_x},{target_y}), waiting {wait_time}s")
+            if wait_time > 0:
+                time.sleep(wait_time)
+            self._advance_waypoint()
+
+        else:
+            # Unknown type — treat as regular move
+            self.input.right_click(target_x, target_y)
+            self._advance_waypoint()
 
     # =========================================================
     # Minimap Navigation (green-dot tracking)
@@ -183,6 +328,9 @@ class WaypointSystem:
         Args:
             frame: Full-screen BGR numpy array from ScreenCapture
         """
+        if frame is not None:
+            self._latest_frame = frame
+
         if frame is None or not self.minimap_enabled:
             return
 
@@ -321,15 +469,21 @@ class WaypointSystem:
 
             # Click toward the next waypoint on the minimap (slightly ahead)
             click_x, click_y = self._get_click_ahead(px, py, wp_mx, wp_my)
+            
+            logger.debug(
+                f"Minimap nav → clicking ({click_x}, {click_y}) "
+                f"toward waypoint {self._current_waypoint_index}"
+            )
+            self.input.right_click(click_x, click_y)
         else:
-            # No dot detected — click directly on the waypoint
+            # No dot detected — click directly on the waypoint and advance classic style!
             click_x, click_y = wp_mx, wp_my
-
-        logger.debug(
-            f"Minimap nav → clicking ({click_x}, {click_y}) "
-            f"toward waypoint {self._current_waypoint_index}"
-        )
-        self.input.right_click(click_x, click_y)
+            logger.debug(
+                f"Minimap nav (no player dot) → clicking ({click_x}, {click_y}) "
+                f"and advancing waypoint {self._current_waypoint_index}"
+            )
+            self.input.right_click(click_x, click_y)
+            self._advance_waypoint()
 
     def _get_click_ahead(self, px: int, py: int, tx: int, ty: int) -> tuple:
         """
